@@ -1,0 +1,131 @@
+---
+title: "Patient edit requests — nurse change workflow"
+description: "Nurses submit demographic change requests that admins approve or reject. Covers POST to create, GET to list, and PUT to approve, reject, or cancel requests."
+---
+
+Nurses cannot directly edit patient demographic data. Instead, they submit an edit request with the proposed changes, which enters a review queue for an admin to act on. This two-step workflow ensures a clinical governance check before any patient record is modified.
+
+## Submit an edit request
+
+```bash
+POST /api/patients/{patient}/edit-requests
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+Requires the `nurse` role.
+
+Each request targets a single demographic field. Submit one request per field change.
+
+### Body parameters
+
+<ParamField body="field_name" type="string" required>
+  The field to change. One of: `full_name`, `phone`, `date_of_birth`, `gender`. Only one field can be changed per request.
+</ParamField>
+
+<ParamField body="new_value" type="string" required>
+  The proposed new value for the field. Must be different from the current value. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="reason" type="string" required>
+  Explanation for the change. Minimum 10 characters, maximum 500 characters.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/patients/55/edit-requests \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "field_name": "phone",
+    "new_value": "+60199998888",
+    "reason": "Patient reported incorrect number on registration"
+  }'
+```
+
+### Response — 201 Created
+
+```json
+{
+  "edit_request": {
+    "id": 12,
+    "patient_id": 55,
+    "requested_by": 7,
+    "status": "pending",
+    "field_name": "phone",
+    "old_value": "+60123456789",
+    "new_value": "+60199998888",
+    "reason": "Patient reported incorrect number on registration",
+    "created_at": "2026-04-30T11:00:00.000000Z"
+  }
+}
+```
+
+## View the pending queue (admin)
+
+```bash
+GET /api/edit-requests
+Authorization: Bearer {token}
+```
+
+Requires `admin` or `super_admin`. Returns all pending edit requests for the admin's hospital.
+
+## Approve a request
+
+```bash
+PUT /api/edit-requests/{editRequest}/approve
+Authorization: Bearer {token}
+```
+
+Applies the proposed changes to the patient record. Requires `admin` or `super_admin`.
+
+### Response — 200 OK
+
+```json
+{
+  "message": "Request approved.",
+  "edit_request": { "id": 12, "status": "approved", "reviewed_at": "2026-05-04T10:00:00.000000Z" }
+}
+```
+
+## Reject a request
+
+```bash
+PUT /api/edit-requests/{editRequest}/reject
+Authorization: Bearer {token}
+```
+
+Marks the request as rejected. The patient record is unchanged. Requires `admin` or `super_admin`.
+
+### Response — 200 OK
+
+```json
+{
+  "message": "Edit request rejected."
+}
+```
+
+## Cancel a pending request (nurse)
+
+```bash
+PUT /api/edit-requests/{editRequest}/cancel
+Authorization: Bearer {token}
+```
+
+A nurse can cancel their own pending request before it is reviewed. Requires `nurse` role.
+
+### Response — 200 OK
+
+```json
+{
+  "message": "Edit request cancelled."
+}
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `403 Forbidden` | Role not permitted for this action |
+| `404 Not Found` | Request not found or not in the expected state |

@@ -1,0 +1,50 @@
+---
+title: "Fetch current user profile — GET /api/auth/me"
+description: "GET /api/auth/me returns the authenticated staff member profile, including name, role, and hospital_id. Use it to verify a session is still valid."
+---
+
+Returns the profile of the staff member who owns the current bearer token. Use this endpoint to confirm the session is still valid and to retrieve the user's role and `hospital_id` for client-side display.
+
+## Request
+
+```bash
+GET /api/auth/me
+Authorization: Bearer {token}
+```
+
+### Example request
+
+```bash
+curl https://api.hospital.example/api/auth/me \
+  -H "Authorization: Bearer 1|abcdefghij1234567890" \
+  -H "Accept: application/json"
+```
+
+## Response
+
+### 200 OK
+
+```json
+{
+  "user": {
+    "id": 7,
+    "name": "Sarah Johnson",
+    "username": "nurse_sarah",
+    "email": "sarah@hospital.example",
+    "role": "nurse",
+    "hospital_id": 1
+  }
+}
+```
+
+<ResponseField name="user.id" type="integer">Unique staff ID.</ResponseField>
+<ResponseField name="user.name" type="string">Full display name.</ResponseField>
+<ResponseField name="user.username" type="string">Login username.</ResponseField>
+<ResponseField name="user.role" type="string">`super_admin`, `admin`, `doctor`, or `nurse`.</ResponseField>
+<ResponseField name="user.hospital_id" type="integer">The hospital this staff member is scoped to.</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | Missing or expired token |

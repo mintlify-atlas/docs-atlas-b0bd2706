@@ -1,81 +1,294 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Get started with the Biometric Patient ID System now"
+description: "Deploy all three services, create a hospital and staff user, register a patient, enroll a fingerprint, and run a first verification."
 ---
 
-## Get started in three steps
+This guide takes you from a fresh clone to a working first verification. By the end, you will have the Laravel API running, the Python fingerprint microservice active, a nurse account authenticated, a patient registered, a fingerprint enrolled, and a successful identity check confirmed.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
 
-### Step 1: Set up your local environment
+<Step title="Deploy the Laravel backend">
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Install PHP dependencies and configure the environment.
 
-### Step 2: Deploy your changes
+<CodeGroup>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+```bash Install dependencies
+cd laravel
+composer install --no-dev --optimize-autoloader
+```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```bash Configure environment
+cp .env.example .env
+php artisan key:generate
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+</CodeGroup>
 
-### Step 3: Go live
+Open `.env` and set your database credentials and the Python service URL:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+```ini .env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=biometric_healthcare
+DB_USERNAME=your_db_user
+DB_PASSWORD=your_db_password
 
-## Next steps
+FINGERPRINT_SERVICE_URL=http://localhost:5001
+```
 
-Now that you have your docs running, explore these key features:
+Run migrations and start the development server:
 
-<CardGroup cols={2}>
+<CodeGroup>
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+```bash Run migrations
+php artisan migrate
+```
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+```bash Start the API server
+php artisan serve --port=8000
+```
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+</CodeGroup>
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+The API will be available at `http://localhost:8000/api`.
 
-</CardGroup>
+</Step>
+
+<Step title="Start the Python fingerprint microservice">
+
+The Python service handles all OpenCV-based ORB feature extraction and template matching. It is consumed internally by Laravel and must not be exposed to the public internet.
+
+<CodeGroup>
+
+```bash Install dependencies
+cd python-service
+pip install -r requirements.txt
+```
+
+```bash Start the service
+uvicorn app.main:app --host 127.0.0.1 --port 5001 --reload
+```
+
+</CodeGroup>
+
+Confirm the service is running:
+
+```bash
+curl http://localhost:5001/health
+```
+
+Interactive API docs are available at `http://localhost:5001/docs`.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+The Python service must listen on `127.0.0.1` only. It has no authentication of its own — access control is enforced entirely by the Laravel API layer. Never bind it to a public interface.
 </Note>
+
+</Step>
+
+<Step title="Configure a hospital and create a staff user">
+
+Every user and patient in the system must belong to a hospital. Use a seeder or the admin API to create the initial records.
+
+**Option A — database seeder** (recommended for development):
+
+```bash
+php artisan db:seed --class=HospitalSeeder
+php artisan db:seed --class=UserSeeder
+```
+
+**Option B — direct API call** (requires an existing `super_admin` token). First create the hospital record:
+
+```bash Create hospital
+curl -s -X POST http://localhost:8000/api/hospitals \
+  -H "Authorization: Bearer <super_admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "City General Hospital",
+    "city": "Sarajevo",
+    "wifi_ssid": "HospitalWiFi",
+    "gps_latitude": 43.8519,
+    "gps_longitude": 18.3866,
+    "gps_radius_meters": 200
+  }'
+```
+
+Then create a nurse user for that hospital (replace `hospital_id` with the ID returned above):
+
+```bash Create nurse user
+curl -s -X POST http://localhost:8000/api/users \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ana Begić",
+    "username": "nurse_ana",
+    "email": "ana.begic@hospital.ba",
+    "password": "secret123",
+    "role": "nurse",
+    "hospital_id": 1
+  }'
+```
+
+</Step>
+
+<Step title="Log in from the mobile app or API">
+
+All subsequent requests require a Sanctum bearer token. Tokens expire after 8 hours and the previous token is revoked on each new login.
+
+```bash Request
+curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "nurse_ana",
+    "password": "secret123"
+  }'
+```
+
+```json Response
+{
+  "token": "1|abc123...",
+  "user": {
+    "id": 1,
+    "name": "Ana Begić",
+    "username": "nurse_ana",
+    "email": "ana.begic@hospital.ba",
+    "role": "nurse",
+    "hospital_id": 1
+  }
+}
+```
+
+Store the `token` value and include it as `Authorization: Bearer <token>` on every subsequent request.
+
+</Step>
+
+<Step title="Register a patient">
+
+Only users with the `nurse` role can register new patients. The `jmbg` field is the 20-digit national identifier and must be unique across the system.
+
+```bash Request
+curl -s -X POST http://localhost:8000/api/patients \
+  -H "Authorization: Bearer 1|abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Marko Marković",
+    "date_of_birth": "1985-03-14",
+    "gender": "male",
+    "jmbg": "14031985100012",
+    "phone": "+38761234567",
+    "notes": "Allergic to penicillin"
+  }'
+```
+
+```json Response
+{
+  "patient": {
+    "id": 42,
+    "hospital_id": 1,
+    "full_name": "Marko Marković",
+    "date_of_birth": "1985-03-14",
+    "gender": "male",
+    "jmbg": "14031985100012",
+    "phone": "+38761234567",
+    "notes": "Allergic to penicillin",
+    "is_active": true,
+    "created_at": "2026-05-04T10:00:00.000000Z",
+    "updated_at": "2026-05-04T10:00:00.000000Z"
+  }
+}
+```
+
+Note the `id` returned — you will need it for fingerprint enrollment.
+
+</Step>
+
+<Step title="Enroll a fingerprint">
+
+Use `POST /api/fingerprint/register` to enroll a fingerprint image using the full enhanced pipeline (grayscale → Gaussian blur → histogram equalization → adaptive threshold → morphological thinning → ORB feature extraction). The image is uploaded as a multipart file. Set `is_primary` to `true` for the finger used in fast-path verification.
+
+```bash Request
+curl -s -X POST http://localhost:8000/api/fingerprint/register \
+  -H "Authorization: Bearer 1|abc123..." \
+  -F "fingerprint=@/path/to/finger.jpg" \
+  -F "patient_id=42" \
+  -F "finger_position=right_index" \
+  -F "is_primary=true"
+```
+
+```json Response
+{
+  "message": "Fingerprint registered successfully.",
+  "fingerprint_id": 17,
+  "patient_id": 42,
+  "finger_position": "right_index",
+  "quality_score": 0.74,
+  "keypoint_count": 312,
+  "feature_status": "ok",
+  "steps_applied": ["grayscale", "gaussian_blur", "histogram_eq", "adaptive_threshold", "thinning"],
+  "is_primary": true
+}
+```
+
+Valid values for `finger_position`: `right_thumb`, `right_index`, `right_middle`, `right_ring`, `right_little`, `left_thumb`, `left_index`, `left_middle`, `left_ring`, `left_little`.
+
+<Tip>
+The minimum accepted `quality_score` for `POST /api/fingerprint/register` and `POST /api/fingerprint/upload` is **0.10** (Laplacian variance normalised over 300). The `POST /api/patients/{patient}/enroll` endpoint applies a stricter threshold of **0.30**. Images below the threshold return HTTP 422 — ask the patient to reposition their finger under better lighting and recapture.
+</Tip>
+
+</Step>
+
+<Step title="Run a verification scan">
+
+`POST /api/verify` performs a hospital-wide identification scan — it matches the probe fingerprint against all enrolled records for the hospital without requiring you to specify a patient ID first. The request body is JSON and the `image` field must be a base64-encoded JPEG or PNG.
+
+```bash Request
+curl -s -X POST http://localhost:8000/api/verify \
+  -H "Authorization: Bearer 1|abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": "<base64-encoded-fingerprint-image>",
+    "gps_latitude": 43.8519,
+    "gps_longitude": 18.3866,
+    "wifi_ssid": "HospitalWiFi"
+  }'
+```
+
+```json Response (match)
+{
+  "status": "matched",
+  "score": 0.8213,
+  "patient": {
+    "id": 42,
+    "full_name": "Marko Marković",
+    "date_of_birth": "1985-03-14",
+    "jmbg": "14031985100012",
+    "gender": "male",
+    "phone": "+38761234567"
+  },
+  "log_id": 101,
+  "ehr": { "...": "GoT-HoMIS patient record" },
+  "insurance": { "...": "GoT-HoMIS eligibility data" }
+}
+```
+
+```json Response (no match)
+{
+  "status": "no_match",
+  "score": 0.0812,
+  "patient": null,
+  "log_id": 102,
+  "ehr": null,
+  "insurance": null
+}
+```
+
+On a successful match, the response includes EHR and insurance data fetched live from GoT-HoMIS. Both fields are `null` when no patient is identified.
+
+<Note>
+`POST /api/verify` enforces geofencing on every request. You must include at least one of `gps_latitude`/`gps_longitude` (within the hospital's configured `gps_radius_meters`) or a `wifi_ssid` that matches the hospital's `wifi_ssid` column. Requests that fail the geofence check are rejected with HTTP 403. Configure the hospital record's `gps_latitude`, `gps_longitude`, `gps_radius_meters`, and `wifi_ssid` to match the physical premises before going live.
+</Note>
+
+</Step>
+
+</Steps>

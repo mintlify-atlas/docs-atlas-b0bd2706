@@ -1,0 +1,55 @@
+---
+title: "POST /api/fingerprint/{fingerprint}/unlock"
+description: "Unlock a fingerprint record that was locked after repeated failed verification attempts. Resets the failure counter. Requires admin or super_admin role."
+---
+
+A fingerprint record is automatically locked when it accumulates **10 failed verification attempts within a 1-hour rolling window**. Locked fingerprints cannot be used for verification until an administrator unlocks them. This endpoint clears the lock and resets all failure counters.
+
+Requires the `admin` or `super_admin` role.
+
+## Request
+
+```bash
+POST /api/fingerprint/{fingerprint}/unlock
+Authorization: Bearer {token}
+```
+
+No request body is required. The `{fingerprint}` path parameter is the fingerprint record ID (not the patient ID).
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/fingerprint/23/unlock \
+  -H "Authorization: Bearer {token}" \
+  -H "Accept: application/json"
+```
+
+## Response
+
+### 200 OK
+
+```json
+{
+  "message": "Fingerprint unlocked successfully.",
+  "fingerprint_id": 23,
+  "patient_id": 55
+}
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `403 Forbidden` | Role is not `admin` or `super_admin`; or admin is trying to unlock a fingerprint from a different hospital |
+| `404 Not Found` | Fingerprint record not found |
+| `409 Conflict` | Fingerprint is not currently locked |
+
+```json
+{
+  "error": "Fingerprint is not locked."
+}
+```
+
+<Note>
+  The unlock action is recorded in the audit log with action type `fingerprint_unlock`, including the fingerprint ID and finger position. Super_admins can unlock fingerprints across any hospital; admins can only unlock fingerprints within their own hospital.
+</Note>

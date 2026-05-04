@@ -1,0 +1,116 @@
+---
+title: "System architecture overview: Flutter, Laravel, Python"
+description: "How the Flutter app, Laravel API, and Python microservice fit together — covering data flow, two-pass matching, GoT-HoMIS, and the database schema."
+---
+
+The Biometric Patient ID System is built from three independent components that communicate over well-defined interfaces. The Flutter mobile app captures fingerprints and sends API calls. The Laravel backend enforces authentication, role-based access, geofencing, and hospital scoping. The Python microservice performs all image processing and template matching using OpenCV. No component holds responsibility for another's domain, and the Python service is never reachable from outside the server.
+
+## Component overview
+
+| Component | Role | Tech stack | Port / transport |
+|---|---|---|---|
+| Flutter mobile app | Fingerprint capture, GPS/WiFi geofence context, staff UI | Flutter 3, Dart, `camera`, `geolocator`, `network_info_plus`, `provider` | HTTPS to Laravel |
+| Laravel API | Auth (Sanctum), role enforcement, hospital scoping, audit logging, GoT-HoMIS enrichment | Laravel (latest), MySQL, PHP | `:8000` (public) |
+| Python fingerprint service | ORB feature extraction, template matching, quality scoring | FastAPI, OpenCV 4.9, NumPy, Pillow, uvicorn | `:5001` (internal only) |
+
+## Data flow
+
+All requests originate on the mobile app and follow a single path inward:
+
+```
+Flutter app
+    │  HTTPS + Sanctum bearer token
+    ▼
+Laravel API  (:8000)
+    │  hospital.access middleware — scopes queries to operator's hospital_id
+    │  role middleware — enforces nurse / admin / doctor / super_admin matrix
+    │  GeofenceService — validates GPS coordinates and WiFi SSID
+    │
+    ├─► MySQL  — patients, fingerprints, verification_logs, audit_logs
+    │
+    └─► Python service  (:5001, 127.0.0.1 only)
+            POST /process              — base64 image → ORB template + quality_score
+            POST /process-fingerprint  — multipart image → skeleton + ORB features
+            POST /match                — probe template + candidates → best patient_id + score
+```
+
+The Python service has no authentication. Its security relies entirely on it being bound to `127.0.0.1`. Laravel is the only caller.
+
+## Fingerprint processing pipeline
+
+### Enrollment
+
+1. The Flutter app captures a JPEG or PNG image of the patient's finger using the device camera.
+2. The image is sent to `POST /api/fingerprint/register` as a multipart upload.
+3. Laravel forwards the file to the Python service at `POST /process-fingerprint`, which runs: grayscale conversion → Gaussian blur → histogram equalization → adaptive thresholding → morphological thinning → ORB keypoint detection and BRIEF descriptor computation.
+4. Python returns the skeleton image (base64 PNG), a `quality_score` in `[0, 1]`, and the ORB feature set (`keypoints`, `descriptors`, `keypoint_count`, `status`).
+5. Laravel checks `quality_score` against the minimum threshold (0.10 for `/fingerprint/register`; 0.30 for `/patients/{patient}/enroll`). Images below the threshold return HTTP 422.
+6. If the quality gate passes, Laravel encrypts the ORB feature template with AES-256-CBC (`Crypt::encryptString`) and writes it to the `fingerprints` table alongside `quality_score`, `finger_position`, `is_primary`, and `enrolled_by`.
+
+### Verification
+
+1. The Flutter app captures a probe image and base64-encodes it.
+2. The probe is sent to `POST /api/verify` as a JSON body field `image`.
+3. Laravel calls Python `POST /process` to extract the probe's ORB template.
+4. Laravel runs a **two-pass matching** strategy against stored templates (see below).
+5. If a match is found, Laravel calls GoT-HoMIS for EHR and insurance enrichment.
+6. The result — `status`, `score`, `patient`, `ehr`, `insurance` — is returned to the app and written to `verification_logs`.
+
+## Two-pass matching strategy
+
+Matching every enrolled fingerprint on every scan would scale poorly. The system uses two indexed passes to short-circuit the expensive case:
+
+**Pass 1 — primary fingerprints only**
+
+Laravel loads all fingerprints where `is_primary = true` and `is_active = true` for the operator's hospital, using the composite index `ix_fp_hospital_primary_active (hospital_id, is_primary, is_active)`. These are sent to Python `POST /match` as a candidate list. If the best score meets or exceeds the match threshold (0.35), the scan is complete.
+
+**Pass 2 — non-primary fallback**
+
+If pass 1 scores below 0.35, Laravel loads the remaining active fingerprints (index `ix_fp_hospital_active`) excluding those already evaluated, and sends them to `POST /match`. The highest score from both passes determines the final verdict.
+
+This halves the average number of Python round-trips in a dataset where most patients have at least one primary fingerprint enrolled.
+
+**Lock-out protection**
+
+Three consecutive failed verifications within a one-hour rolling window (tracked by `failed_attempts` and `attempts_window_start` on the `fingerprints` row) lock the fingerprint record. Locked records return HTTP 423 until an admin or super_admin calls `POST /api/fingerprint/{fingerprint}/unlock`.
+
+## GoT-HoMIS integration
+
+On every successful match, Laravel calls two GoT-HoMIS (Government of Tanzania Hospital Management Information System) endpoints via `HomisService`:
+
+- `getPatientRecord(patient_id)` — retrieves the EHR record from the `patient_registration` module.
+- `getInsuranceEligibility(patient_id)` — checks coverage status from the `insurance` module.
+
+Both calls are fire-and-forget relative to the verification result: if GoT-HoMIS is unavailable, the verification response is still returned, with `ehr` and `insurance` set to `null`. Every HoMIS access is written to `audit_logs` with `homis_module` and `response_status` populated, satisfying PDPA 2023 traceability requirements.
+
+## Database schema
+
+| Table | Key columns | Purpose |
+|---|---|---|
+| `hospitals` | `id`, `name`, `city`, `wifi_ssid`, `gps_latitude`, `gps_longitude`, `gps_radius_meters`, `is_active` | Hospital registry; geofence configuration per site |
+| `users` | `id`, `name`, `username`, `email`, `role` (`admin`\|`nurse`\|`doctor`\|`super_admin`), `hospital_id`, `is_active` | Staff accounts; Sanctum tokens stored in `personal_access_tokens` |
+| `patients` | `id`, `hospital_id`, `full_name`, `date_of_birth`, `gender`, `jmbg`, `phone`, `notes`, `is_active` | Patient demographics; `jmbg` is the 20-digit national identifier (unique) |
+| `fingerprints` | `id`, `patient_id`, `hospital_id`, `enrolled_by`, `finger_position`, `template` (encrypted), `quality_score`, `is_primary`, `is_active`, `failed_attempts`, `locked_at`, `attempts_window_start` | AES-256-CBC encrypted ORB templates; one row per `(patient_id, finger_position)` |
+| `verification_logs` | `id`, `patient_id`, `fingerprint_id`, `operator_id`, `hospital_id`, `score`, `status` (`matched`\|`no_match`\|`error`), `gps_latitude`, `gps_longitude`, `wifi_ssid`, `error_message` | Immutable audit trail of every identification scan |
+| `audit_logs` | `id`, `staff_id`, `patient_id`, `hospital_id`, `action`, `homis_module`, `response_status`, `ip_address`, `user_agent`, `meta` | Fine-grained PDPA-compliant log of every sensitive action (login, enrollment, EHR access, etc.) |
+| `patient_edit_requests` | `id`, `patient_id`, `requested_by`, `reviewed_by`, `hospital_id`, `field_name`, `old_value`, `new_value`, `reason`, `status`, `reviewed_at`, `expires_at` | Nurse-submitted demographic change requests pending admin approval; auto-expire after 30 days |
+
+<CardGroup cols={2}>
+
+<Card title="API reference" icon="code" href="/api/auth/login">
+  Full endpoint documentation with request and response schemas for all routes.
+</Card>
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Step-by-step guide to deploying all three services and running your first verification.
+</Card>
+
+<Card title="Role matrix" icon="shield" href="/security/roles-permissions">
+  Detailed breakdown of what each role (nurse, admin, doctor, super_admin) can access.
+</Card>
+
+<Card title="Geofencing" icon="location-dot" href="/security/geofencing">
+  How GPS radius and WiFi SSID restrictions are configured and enforced per hospital.
+</Card>
+
+</CardGroup>

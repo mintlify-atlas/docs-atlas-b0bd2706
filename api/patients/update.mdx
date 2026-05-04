@@ -1,0 +1,112 @@
+---
+title: "Update and deactivate patients — admin endpoints"
+description: "PUT /api/patients updates demographics directly (admin/super_admin only). DELETE deactivates the record. Nurses use the edit-request workflow instead."
+---
+
+Admins and super_admins can update patient demographic fields directly. Nurses are not permitted to use this endpoint — they must submit a change request via `POST /api/patients/{patient}/edit-requests`, which enters the admin approval queue.
+
+Requires the `admin` or `super_admin` role.
+
+## Update patient
+
+```bash
+PUT /api/patients/{patient}
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+All fields are optional. Only fields included in the request body are updated.
+
+### Body parameters
+
+<ParamField body="full_name" type="string">
+  Patient's full name. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="date_of_birth" type="string">
+  Date of birth in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="gender" type="string">
+  One of: `male`, `female`, `other`.
+</ParamField>
+
+<ParamField body="jmbg" type="string">
+  National identification number, up to 20 characters. Must be unique.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Contact phone number, up to 20 characters.
+</ParamField>
+
+<ParamField body="notes" type="string">
+  Clinical notes, up to 1000 characters.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X PUT https://api.hospital.example/api/patients/55 \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "+60199998888", "notes": "Allergic to penicillin"}'
+```
+
+### Response — 200 OK
+
+```json
+{
+  "patient": {
+    "id": 55,
+    "full_name": "Ahmad bin Yusof",
+    "date_of_birth": "1978-04-12",
+    "gender": "male",
+    "phone": "+60199998888",
+    "notes": "Allergic to penicillin",
+    "is_active": true,
+    "is_enrolled": true
+  }
+}
+```
+
+## Deactivate a patient
+
+```bash
+DELETE /api/patients/{patient}
+Authorization: Bearer {token}
+```
+
+Soft-deletes a patient by setting `is_active = false`. The patient record and fingerprints are retained in the database. Requires `admin` or `super_admin`.
+
+### Response — 200 OK
+
+```json
+{
+  "message": "Patient deactivated."
+}
+```
+
+## Remove a fingerprint record
+
+```bash
+DELETE /api/patients/{patient}/fingerprints/{fingerprint}
+Authorization: Bearer {token}
+```
+
+Deactivates a specific fingerprint record (`is_active = false`). The template is retained for audit purposes. Requires `admin` or `super_admin`.
+
+### Response — 200 OK
+
+```json
+{
+  "message": "Fingerprint deactivated."
+}
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `403 Forbidden` | Nurse attempting direct edit (hint returned in response body) |
+| `404 Not Found` | Patient not found or belongs to a different hospital |
+| `422 Unprocessable Entity` | Validation error |

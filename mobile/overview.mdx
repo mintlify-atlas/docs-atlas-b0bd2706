@@ -1,0 +1,85 @@
+---
+title: "Flutter mobile app for hospital fingerprint scans"
+description: "Android app that lets nurses register patients and verify identity by fingerprint at the bedside, with built-in GPS and WiFi geofencing."
+---
+
+The Flutter mobile app is the field-facing component of the Biometric Patient ID System. Nurses use it at the point of care to enroll new patients—capturing fingerprint images through the device camera—and to confirm patient identity before treatment. Every action is gated behind two location checks: the device must be within 200 metres of the configured hospital coordinates and connected to the hospital WiFi network. The app communicates with the Laravel backend over a REST API; the backend forwards fingerprint images to a Python/OpenCV processing service and returns match results and EHR data.
+
+## Key screens
+
+The app is organised into eleven screens that cover the full patient workflow:
+
+| Screen file | Purpose |
+|---|---|
+| `splash_screen.dart` | Animated launch screen, redirects to login after 3 seconds |
+| `login_screen.dart` | Staff authentication form |
+| `home_dashboard.dart` | Role-specific dashboard with geofence and WiFi status |
+| `patient_registration_screen.dart` | Multi-step form to create a patient record |
+| `fingerprint_capture_screen.dart` | Capture wrapper that opens `CameraScreen` and routes to preview |
+| `camera_screen.dart` | Full-screen camera viewfinder with fingerprint overlay |
+| `fingerprint_preview_screen.dart` | Review image quality before submitting |
+| `verification_screen.dart` | Enter patient ID, capture hand, send for matching |
+| `result_screen.dart` | Animated match / no-match result with score ring |
+| `ehr_screen.dart` | GoT-HoMIS Electronic Health Record and insurance display |
+| `edit_request_screen.dart` | Submit or review demographic change requests |
+
+## Services
+
+The app uses five service classes, each responsible for a single domain:
+
+| Service | Responsibility |
+|---|---|
+| `AuthService` | `POST /api/auth/login`, bearer token management |
+| `FingerprintService` | `POST /api/fingerprint/register` and `POST /api/fingerprint/verify` |
+| `LocationService` | GPS position via `geolocator`, compares distance to hospital anchor |
+| `NetworkService` | WiFi SSID lookup via `network_info_plus`, checks against `allowedSsids` |
+| `PatientService` | `POST /api/patients`, edit-request submission and admin review endpoints |
+
+## State management
+
+The app uses the **Provider** package for state management. A single `AuthProvider` (registered in `MultiProvider` in `main.dart`) holds the logged-in `User` model, authentication token, loading state, and error message. Screens consume it through `context.read<AuthProvider>()` for mutations and `context.watch<AuthProvider>()` for reactive rebuilds. All other data fetching is done directly in widget state using the service classes, keeping providers lightweight.
+
+## Flutter dependencies
+
+The `pubspec.yaml` declares the following runtime dependencies:
+
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  provider: ^6.1.2
+  camera: ^0.11.0+2
+  image_picker: ^1.1.2
+  geolocator: ^13.0.2
+  network_info_plus: ^6.0.1
+```
+
+| Package | Role |
+|---|---|
+| `http` | All REST calls to the Laravel API |
+| `provider` | `AuthProvider` state management |
+| `camera` | Live viewfinder and image capture in `CameraScreen` |
+| `image_picker` | Fallback image selection |
+| `geolocator` | GPS position and `distanceBetween` calculation |
+| `network_info_plus` | WiFi SSID retrieval for hospital network check |
+
+## Geofencing enforcement
+
+Access to patient actions is enforced by two independent checks that run in parallel when `HomeDashboard` initialises:
+
+1. **GPS check** — `LocationService.isWithinHospitalRange()` calls `Geolocator.getCurrentPosition()` and computes the distance to the configured anchor point (`hospitalLat: 43.8563`, `hospitalLng: 18.4131`). If the device is further than `allowedRadiusMeters` (200 m), the dashboard replaces itself with `_GeofenceBlockedScreen` and blocks all navigation.
+
+2. **WiFi check** — `NetworkService.isConnectedToHospitalWifi()` calls `NetworkInfo().getWifiName()` and compares the result against `allowedSsids` (defaults to `['Hospital_WiFi']`). If the SSID does not match, patient registration and verification action cards are rendered as disabled (0.5 opacity) and a `_WifiBanner` prompts the nurse to reconnect.
+
+Both checks must pass before any fingerprint operation can proceed.
+
+<CardGroup cols={2}>
+  <Card title="Set up the app" icon="wrench" href="/mobile/setup">
+    Prerequisites, Android permissions, and commands to build and run.
+  </Card>
+  <Card title="Screens reference" icon="mobile" href="/mobile/screens">
+    Per-screen breakdown of UI, actions, and API calls.
+  </Card>
+</CardGroup>

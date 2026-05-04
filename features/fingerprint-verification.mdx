@@ -1,0 +1,156 @@
+---
+title: "Verify patient identity by fingerprint scan"
+description: "Match a probe fingerprint image against enrolled templates using direct single-patient verification or hospital-wide two-pass identification."
+---
+
+The system provides two verification modes depending on whether the patient's identity is already known at the point of scan. Both modes process the probe image through the same ORB pipeline, track failed attempts, and return GoT-HoMIS EHR and insurance data on a successful match.
+
+## Verification modes
+
+### Direct verification — POST /api/fingerprint/verify
+
+Use this endpoint when the patient's identity is already known, for example when the patient presents an ID card or a wristband. The probe image is matched only against the named patient's enrolled templates.
+
+The endpoint loads the patient's primary active fingerprint first. If no primary fingerprint exists, it falls back to any active fingerprint for that patient. If neither exists, it returns 404.
+
+### Hospital-wide identification — POST /api/verify
+
+Use this endpoint when the patient's identity is unknown. The probe is matched against every active fingerprint enrolled at the operator's hospital. A two-pass strategy reduces average Python round-trips:
+
+- **Pass 1** matches the probe against all primary fingerprints (`is_primary = true`) in the hospital. If a match is found above the threshold, the result is returned immediately.
+- **Pass 2** runs only when pass 1 finds no match. The probe is compared against all remaining non-primary active fingerprints as a fallback.
+
+<Note>
+  `POST /api/verify` enforces a geofence check before running any matching. The request must include the device's `gps_latitude`, `gps_longitude`, and/or `wifi_ssid` fields. If neither GPS nor WiFi is configured on the hospital record the check is skipped, but in a configured environment a 403 is returned when the device is outside hospital premises. See [Restrict access with geofencing and WiFi checks](/features/access-control) for details.
+</Note>
+
+## Match thresholds
+
+| Endpoint | Threshold | Basis |
+|---|---|---|
+| `POST /api/verify` (hospital-wide) | `0.35` | Normalized similarity score from Python `/match` |
+| `POST /api/fingerprint/verify` (direct) | `0.35` | Normalized similarity score from Python `/match` |
+
+Both endpoints delegate matching to the Python `/match` endpoint, which returns a score in the 0–1 range. The `verdict` field (`MATCH` or `NO_MATCH`) in the direct-verify response is determined by the Python `match_features` function using its own internal Lowe ratio test threshold.
+
+## GoT-HoMIS enrichment
+
+When a match is found, the backend fetches the patient's electronic health record and insurance eligibility from the GoT-HoMIS integration. Both values are included in the verification response under `ehr` and `insurance`. If the HoMIS service is unavailable the fields are `null` — verification still succeeds.
+
+## Lock mechanism
+
+Every failed match increments `failed_attempts` on the matched fingerprint record within a rolling one-hour window. When `failed_attempts` reaches 10 within the window, `locked_at` is set and subsequent attempts return 423. On a successful match, `failed_attempts` is reset to zero. An admin must call `POST /api/fingerprint/{fingerprint}/unlock` to clear a lock manually.
+
+## Direct verification example
+
+```bash
+curl -X POST https://your-api/api/fingerprint/verify \
+  -H "Authorization: Bearer <nurse-token>" \
+  -F "fingerprint=@/path/to/probe.jpg" \
+  -F "patient_id=42"
+```
+
+**Match response (200)**
+
+```json
+{
+  "verdict": "MATCH",
+  "score": 0.87,
+  "probe_keypoints": 298,
+  "feature_status": "ok",
+  "patient": {
+    "id": 42,
+    "full_name": "Amina Kovač"
+  },
+  "matched_finger": "right_hand",
+  "ehr": {
+    "patient_id": "42",
+    "record_number": "GH-00942",
+    "diagnoses": ["J45.9", "I10"],
+    "last_visit": "2026-03-18"
+  },
+  "insurance": {
+    "policy_number": "BIH-INS-88412",
+    "eligible": true,
+    "valid_until": "2027-01-01"
+  }
+}
+```
+
+**No-match response (200)**
+
+```json
+{
+  "verdict": "NO_MATCH",
+  "score": 0.04,
+  "probe_keypoints": 241,
+  "feature_status": "ok",
+  "patient": {
+    "id": 42,
+    "full_name": "Amina Kovač"
+  },
+  "matched_finger": "right_hand",
+  "ehr": null,
+  "insurance": null
+}
+```
+
+## Hospital-wide identification example
+
+```bash
+curl -X POST https://your-api/api/verify \
+  -H "Authorization: Bearer <nurse-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": "<base64-encoded-probe-image>",
+    "gps_latitude": 43.8484,
+    "gps_longitude": 18.3564,
+    "wifi_ssid": "HospitalNet"
+  }'
+```
+
+**Match response (200)**
+
+```json
+{
+  "status": "matched",
+  "score": 0.7823,
+  "patient": {
+    "id": 42,
+    "full_name": "Amina Kovač",
+    "date_of_birth": "1990-04-15",
+    "jmbg": "04990415100023",
+    "gender": "female",
+    "phone": "+387 61 000 000"
+  },
+  "log_id": 1058,
+  "ehr": {
+    "patient_id": "42",
+    "record_number": "GH-00942",
+    "diagnoses": ["J45.9", "I10"],
+    "last_visit": "2026-03-18"
+  },
+  "insurance": {
+    "policy_number": "BIH-INS-88412",
+    "eligible": true,
+    "valid_until": "2027-01-01"
+  }
+}
+```
+
+**No-match response (200)**
+
+```json
+{
+  "status": "no_match",
+  "score": 0.1102,
+  "patient": null,
+  "log_id": 1059,
+  "ehr": null,
+  "insurance": null
+}
+```
+
+## Verification logs
+
+Every attempt is recorded in the `verification_logs` table regardless of outcome. Nurses see only their own logs; doctors see all hospital logs without the match score; admins see all hospital logs with scores. Use `GET /api/verify/logs` to query the log stream with filters for `patient_id`, `operator_id`, and `status`.

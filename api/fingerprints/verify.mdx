@@ -1,0 +1,114 @@
+---
+title: "Verify fingerprint against known patient — direct match"
+description: "POST /api/fingerprint/verify matches a probe fingerprint to a named patient template. Returns MATCH or NO MATCH verdict with score and EHR data on success."
+---
+
+Use this endpoint when you already know which patient to verify — for example, the patient presents their ID card and a nurse needs to confirm their identity. The probe image is compared only against that patient's primary active fingerprint template, making it faster than the hospital-wide identification endpoint.
+
+For identifying an unknown patient across all enrolled fingerprints, use `POST /api/verify` instead.
+
+Requires the `nurse` role. Rate-limited to **30 requests per minute per token**.
+
+## Request
+
+```bash
+POST /api/fingerprint/verify
+Authorization: Bearer {token}
+Content-Type: multipart/form-data
+```
+
+### Form fields
+
+<ParamField body="fingerprint" type="file" required>
+  The probe fingerprint image. JPEG or PNG, maximum 5 MB.
+</ParamField>
+
+<ParamField body="patient_id" type="integer" required>
+  ID of the patient to verify against. Must belong to the nurse's hospital.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/fingerprint/verify \
+  -H "Authorization: Bearer {token}" \
+  -F "fingerprint=@/path/to/probe.jpg" \
+  -F "patient_id=55"
+```
+
+## Response
+
+### 200 OK — verification completed
+
+A 200 response is returned whether the verdict is MATCH or NO MATCH. Always check the `verdict` field.
+
+**Match response:**
+
+```json
+{
+  "verdict": "MATCH",
+  "score": 0.71,
+  "probe_keypoints": 142,
+  "feature_status": "ok",
+  "patient": {
+    "id": 55,
+    "full_name": "Ahmad bin Yusof"
+  },
+  "matched_finger": "right_index",
+  "ehr": { ... },
+  "insurance": { ... }
+}
+```
+
+**No match response:**
+
+```json
+{
+  "verdict": "NO_MATCH",
+  "score": 0.08,
+  "probe_keypoints": 98,
+  "feature_status": "ok",
+  "patient": {
+    "id": 55,
+    "full_name": "Ahmad bin Yusof"
+  },
+  "matched_finger": "right_index",
+  "ehr": null,
+  "insurance": null
+}
+```
+
+<ResponseField name="verdict" type="string">
+  `MATCH` or `NO_MATCH`.
+</ResponseField>
+
+<ResponseField name="score" type="float">
+  Normalized match score. Higher is better.
+</ResponseField>
+
+<ResponseField name="ehr" type="object | null">
+  EHR data from GoT-HoMIS, returned only on `MATCH`. `null` on no match or if HoMIS is unavailable.
+</ResponseField>
+
+<ResponseField name="insurance" type="object | null">
+  Insurance eligibility data from GoT-HoMIS, returned only on `MATCH`.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `404 Not Found` | Patient not found or no enrolled fingerprint |
+| `423 Locked` | Fingerprint is locked after repeated failed attempts |
+| `503 Service Unavailable` | Python service unreachable |
+
+```json
+{
+  "error": "This fingerprint record is locked due to repeated failed attempts. Contact an administrator to unlock.",
+  "locked_at": "2026-04-30T14:22:00.000000Z"
+}
+```
+
+<Warning>
+  A fingerprint record is locked after **10 failed verification attempts within 1 hour**. An admin must call `POST /api/fingerprint/{fingerprint}/unlock` to restore access.
+</Warning>

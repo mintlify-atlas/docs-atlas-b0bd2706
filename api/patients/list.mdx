@@ -1,0 +1,112 @@
+---
+title: "GET /api/patients — list and retrieve patients"
+description: "List all active patients in your hospital or retrieve a single patient record with enrolled fingerprint details. Available to all authenticated roles."
+---
+
+The patient listing and retrieval endpoints are available to all authenticated roles. Results are automatically scoped to the requesting user's `hospital_id` — staff cannot see patients from other hospitals.
+
+## List patients
+
+```bash
+GET /api/patients
+Authorization: Bearer {token}
+```
+
+### Query parameters
+
+<ParamField query="page" type="integer">
+  Page number. Defaults to `1`.
+</ParamField>
+
+<ParamField query="per_page" type="integer">
+  Results per page. Defaults to `20`.
+</ParamField>
+
+### Example request
+
+```bash
+curl "https://api.hospital.example/api/patients?per_page=10" \
+  -H "Authorization: Bearer {token}" \
+  -H "Accept: application/json"
+```
+
+### Response — 200 OK
+
+```json
+{
+  "data": [
+    {
+      "id": 55,
+      "hospital_id": 1,
+      "full_name": "Ahmad bin Yusof",
+      "date_of_birth": "1978-04-12",
+      "gender": "male",
+      "jmbg": "78041211223344",
+      "phone": "+60123456789",
+      "notes": null,
+      "is_active": true,
+      "is_enrolled": true,
+      "created_at": "2026-04-01T08:00:00.000000Z"
+    }
+  ],
+  "current_page": 1,
+  "per_page": 20,
+  "total": 134
+}
+```
+
+<ResponseField name="is_enrolled" type="boolean">
+  Virtual attribute — `true` if the patient has at least one active fingerprint template enrolled.
+</ResponseField>
+
+## Retrieve a single patient
+
+```bash
+GET /api/patients/{patient}
+Authorization: Bearer {token}
+```
+
+Returns the patient record along with all enrolled fingerprint records.
+
+### Example request
+
+```bash
+curl https://api.hospital.example/api/patients/55 \
+  -H "Authorization: Bearer {token}" \
+  -H "Accept: application/json"
+```
+
+### Response — 200 OK
+
+```json
+{
+  "patient": {
+    "id": 55,
+    "full_name": "Ahmad bin Yusof",
+    "date_of_birth": "1978-04-12",
+    "gender": "male",
+    "jmbg": "78041211223344",
+    "phone": "+60123456789",
+    "is_active": true,
+    "is_enrolled": true,
+    "fingerprints": [
+      {
+        "id": 23,
+        "patient_id": 55,
+        "finger_position": "right_index",
+        "quality_score": 0.72,
+        "is_primary": true,
+        "is_active": true,
+        "created_at": "2026-04-01T09:15:00.000000Z"
+      }
+    ]
+  }
+}
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | Missing or expired token |
+| `404 Not Found` | Patient does not exist or belongs to a different hospital |

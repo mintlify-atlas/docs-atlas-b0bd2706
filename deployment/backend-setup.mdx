@@ -1,0 +1,92 @@
+---
+title: "Deploy the Laravel backend API"
+description: "Step-by-step guide to installing and running the Laravel backend, configuring the database, and seeding the initial hospital and staff records."
+---
+
+The Laravel backend is the central API server that authenticates staff, manages patient records, enforces role-based access control, and orchestrates calls to the Python fingerprint microservice. It is built on Laravel with MySQL and uses Laravel Sanctum for token-based authentication.
+
+<Steps>
+  <Step title="Install PHP dependencies">
+    Navigate to the `laravel/` directory and install Composer packages.
+
+    ```bash
+    cd laravel
+    composer install --no-dev --optimize-autoloader
+    ```
+  </Step>
+
+  <Step title="Configure environment">
+    Copy the example environment file and update the values for your deployment.
+
+    ```bash
+    cp .env.example .env
+    php artisan key:generate
+    ```
+
+    Key variables to set:
+
+    | Variable | Description |
+    |----------|-------------|
+    | `DB_HOST` | MySQL host |
+    | `DB_DATABASE` | Database name |
+    | `DB_USERNAME` | Database user |
+    | `DB_PASSWORD` | Database password |
+    | `FINGERPRINT_SERVICE_URL` | URL of the Python microservice (e.g. `http://127.0.0.1:5001`) |
+    | `APP_URL` | Public URL of the Laravel app |
+
+    <Warning>
+      Never set `APP_DEBUG=true` in production. Set `APP_ENV=production` and `APP_DEBUG=false`.
+    </Warning>
+  </Step>
+
+  <Step title="Run database migrations">
+    ```bash
+    php artisan migrate
+    ```
+
+    This creates all tables: `hospitals`, `users`, `patients`, `fingerprints`, `verification_logs`, `audit_logs`, and `patient_edit_requests`.
+  </Step>
+
+  <Step title="Seed initial data">
+    Run the database seeder to create a default hospital and super_admin account.
+
+    ```bash
+    php artisan db:seed
+    ```
+
+    Check your seeders in `database/seeders/` for the default credentials, and change the super_admin password immediately after first login.
+  </Step>
+
+  <Step title="Start the server">
+    For development:
+
+    ```bash
+    php artisan serve --host=0.0.0.0 --port=8000
+    ```
+
+    For production, use a proper web server (Nginx + PHP-FPM) with HTTPS. The API base path is `/api`.
+  </Step>
+</Steps>
+
+## Rate limits
+
+The API enforces rate limits at the route level:
+
+| Endpoint group | Limit |
+|----------------|-------|
+| `POST /api/auth/login` | 10 requests/min per IP |
+| Fingerprint enrollment | 20 requests/min per token |
+| Fingerprint verification | 30 requests/min per token |
+
+## Health check
+
+Once running, verify the backend is reachable:
+
+```bash
+curl http://localhost:8000/api/auth/me \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+<Tip>
+  See the [Python service setup](/deployment/python-service) page to configure the fingerprint processing microservice that the Laravel backend calls internally.
+</Tip>

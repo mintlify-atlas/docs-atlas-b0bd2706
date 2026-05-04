@@ -1,0 +1,123 @@
+---
+title: "Match fingerprint templates — /match and /match-fingerprint"
+description: "POST /match selects the best patient from a candidate list. POST /match-fingerprint compares two uploaded images directly and returns MATCH or NO MATCH verdict."
+---
+
+The Python microservice provides two matching endpoints. `/match` is used in the main verification pipeline to find a patient from a list of candidate templates. `/match-fingerprint` is a utility endpoint for directly comparing two uploaded images and returning a MATCH/NO MATCH verdict.
+
+## POST /match
+
+Compares a probe template against a list of candidate templates and returns the candidate with the highest match score. Used by the Laravel backend in `POST /api/verify`.
+
+### Request
+
+```bash
+POST http://127.0.0.1:5001/match
+Content-Type: application/json
+```
+
+```json
+{
+  "probe": {
+    "keypoints": [...],
+    "descriptors": [...]
+  },
+  "candidates": [
+    {
+      "patient_id": 55,
+      "template": { "keypoints": [...], "descriptors": [...] }
+    },
+    {
+      "patient_id": 56,
+      "template": { "keypoints": [...], "descriptors": [...] }
+    }
+  ]
+}
+```
+
+<ParamField body="probe" type="object" required>
+  The probe feature template extracted from the scan image (output of `/process` or `/process-fingerprint`).
+</ParamField>
+
+<ParamField body="candidates" type="array" required>
+  List of candidate templates to compare against. Each item requires `patient_id` (integer) and `template` (object). Must not be empty.
+</ParamField>
+
+### Response — 200 OK
+
+```json
+{
+  "patient_id": 55,
+  "score": 0.6812
+}
+```
+
+<ResponseField name="patient_id" type="integer">
+  The `patient_id` from the candidate list with the highest match score.
+</ResponseField>
+
+<ResponseField name="score" type="float">
+  Normalized match score rounded to 4 decimal places. The Laravel `VerificationController` uses a threshold of **0.35** to determine MATCH vs. NO MATCH.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | `candidates` list is empty, or no candidates could be processed |
+
+## POST /match-fingerprint
+
+Directly compares two uploaded fingerprint images and returns a MATCH or NO MATCH verdict. Useful for testing the pipeline end-to-end without going through the Laravel backend.
+
+### Request
+
+```bash
+POST http://127.0.0.1:5001/match-fingerprint
+Content-Type: multipart/form-data
+```
+
+<ParamField body="image1" type="file" required>
+  First fingerprint image (JPEG or PNG).
+</ParamField>
+
+<ParamField body="image2" type="file" required>
+  Second fingerprint image (JPEG or PNG).
+</ParamField>
+
+### Response — 200 OK
+
+```json
+{
+  "verdict": "MATCH",
+  "score": 42.5,
+  "good_matches": 34,
+  "total_matches": 80,
+  "image1": {
+    "filename": "probe.jpg",
+    "keypoint_count": 148,
+    "feature_status": "ok"
+  },
+  "image2": {
+    "filename": "stored.jpg",
+    "keypoint_count": 156,
+    "feature_status": "ok"
+  }
+}
+```
+
+<ResponseField name="verdict" type="string">
+  `MATCH` if score ≥ 20, `NO MATCH` if score < 20.
+</ResponseField>
+
+<ResponseField name="score" type="float">
+  Normalized score in [0, 100] based on the ratio of good BFMatcher matches to total matches.
+</ResponseField>
+
+<ResponseField name="good_matches" type="integer">
+  Number of descriptor pairs that passed the Lowe ratio test (ratio &lt; 0.75).
+</ResponseField>
+
+<Note>
+  The score scale differs between `/match` (0–1, threshold 0.35) and `/match-fingerprint` (0–100, threshold 20). Both use the same underlying BFMatcher with NORM_HAMMING and Lowe ratio test, but normalize the result differently.
+</Note>

@@ -1,0 +1,99 @@
+---
+title: "POST /api/fingerprint/register — enroll a fingerprint"
+description: "Upload a JPEG or PNG fingerprint image to enroll a patient. The enhanced pipeline preprocesses the image and extracts ORB features before storing the template."
+---
+
+Use this endpoint to enroll a fingerprint for an existing patient. The image is sent through the full preprocessing pipeline: grayscale conversion, Gaussian blur, histogram equalization, adaptive thresholding, morphological thinning, and finally ORB feature extraction. The resulting feature template is encrypted and stored in the `fingerprints` table.
+
+Requires the `nurse` or `admin` role. Rate-limited to **20 requests per minute per token**.
+
+<Note>
+  A legacy enrollment endpoint (`POST /api/fingerprint/upload`) is also available and accepts a base64-encoded image. The `/register` endpoint is preferred as it uses the enhanced preprocessing pipeline and typically produces higher-quality templates.
+</Note>
+
+## Request
+
+```bash
+POST /api/fingerprint/register
+Authorization: Bearer {token}
+Content-Type: multipart/form-data
+```
+
+### Form fields
+
+<ParamField body="fingerprint" type="file" required>
+  The fingerprint image file. Must be JPEG or PNG, maximum 5 MB.
+</ParamField>
+
+<ParamField body="patient_id" type="integer" required>
+  ID of the patient to enroll. Must belong to the nurse's hospital.
+</ParamField>
+
+<ParamField body="finger_position" type="string">
+  Which finger was captured. Defaults to `right_hand`. Accepted values: `right_thumb`, `right_index`, `right_middle`, `right_ring`, `right_little`, `left_thumb`, `left_index`, `left_middle`, `left_ring`, `left_little`, `right_hand`, `left_hand`.
+</ParamField>
+
+<ParamField body="is_primary" type="boolean">
+  Whether this is the primary fingerprint used in first-pass matching. Defaults to `false`. Setting to `true` demotes any existing primary fingerprint for this patient.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/fingerprint/register \
+  -H "Authorization: Bearer {token}" \
+  -F "fingerprint=@/path/to/finger.jpg" \
+  -F "patient_id=55" \
+  -F "finger_position=right_index" \
+  -F "is_primary=true"
+```
+
+## Response
+
+### 201 Created — enrollment successful
+
+```json
+{
+  "message": "Fingerprint registered successfully.",
+  "fingerprint_id": 23,
+  "patient_id": 55,
+  "finger_position": "right_index",
+  "quality_score": 0.72,
+  "keypoint_count": 148,
+  "feature_status": "ok",
+  "steps_applied": ["grayscale", "blur", "equalize", "threshold", "thin"],
+  "is_primary": true
+}
+```
+
+<ResponseField name="quality_score" type="float">
+  Quality score in [0, 1] from the Python preprocessing pipeline. Scores below 0.10 are rejected.
+</ResponseField>
+
+<ResponseField name="feature_status" type="string">
+  `ok` — sufficient features for reliable matching. `low_quality` — fewer than 10 keypoints. `no_features` — blank or unreadable image (rejected).
+</ResponseField>
+
+<ResponseField name="keypoint_count" type="integer">
+  Number of ORB keypoints extracted from the fingerprint.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `404 Not Found` | Patient not found or belongs to a different hospital |
+| `422 Unprocessable Entity` | Quality score too low or no features extracted |
+| `503 Service Unavailable` | Python fingerprint service is unreachable |
+
+```json
+{
+  "error": "Fingerprint quality is too low. Please recapture.",
+  "quality_score": 0.05,
+  "minimum": 0.10
+}
+```
+
+<Tip>
+  If you receive a `low_quality` status but the request succeeds, consider re-enrolling in better lighting or with the finger pressed more firmly against the camera lens.
+</Tip>

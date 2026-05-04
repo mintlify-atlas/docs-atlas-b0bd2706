@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Biometric Patient ID System",
+  "projectType": "saas",
+  "projectName": "Biometric Patient ID System",
+  "projectDescription": "A mobile-based fingerprint verification platform for patient identification in hospital settings, combining a Flutter app, Laravel REST API, and a Python/OpenCV fingerprint processing microservice.",
   "theme": "luma",
-  "colors": {
-    "primary": "#1D6FA4",
-    "light": "#E8F4FD",
-    "dark": "#0D3B5E"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/FrankEWallace/Biometric-in-Healthcare"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/FrankEWallace/Biometric-in-Healthcare"
-    }
-  },
+  "primaryColor": "#1D6FA4",
+  "lightColor": "#E8F4FD",
+  "darkColor": "#0D3B5E",
   "navigation": {
     "tabs": [
       {
@@ -111,5 +99,51 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Camera-based fingerprint capture and ORB feature extraction via OpenCV",
+    "Two-pass hospital-wide patient identification (primary then non-primary fingerprints)",
+    "GPS geofencing and WiFi SSID restriction to enforce hospital-premises-only access",
+    "Role-based access control: super_admin, admin, doctor, nurse",
+    "Fingerprint lock mechanism after repeated failed verification attempts",
+    "GoT-HoMIS integration for EHR and insurance eligibility enrichment on match",
+    "Patient demographic edit request workflow with admin approval queue",
+    "Comprehensive audit logging of all authentication and fingerprint events",
+    "Multi-hospital support with hospital-scoped data isolation"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/login",
+    "POST /api/auth/logout",
+    "GET  /api/auth/me",
+    "GET  /api/patients",
+    "POST /api/patients",
+    "GET  /api/patients/{patient}",
+    "PUT  /api/patients/{patient}",
+    "DELETE /api/patients/{patient}",
+    "POST /api/patients/{patient}/enroll",
+    "DELETE /api/patients/{patient}/fingerprints/{fingerprint}",
+    "POST /api/patients/{patient}/edit-requests",
+    "GET  /api/edit-requests",
+    "PUT  /api/edit-requests/{editRequest}/approve",
+    "PUT  /api/edit-requests/{editRequest}/reject",
+    "PUT  /api/edit-requests/{editRequest}/cancel",
+    "POST /api/fingerprint/upload",
+    "POST /api/fingerprint/register",
+    "POST /api/fingerprint/verify",
+    "POST /api/fingerprint/{fingerprint}/unlock",
+    "POST /api/verify",
+    "GET  /api/verify/logs",
+    "GET  /api/verify/logs/{log}",
+    "GET  /api/users",
+    "POST /api/users",
+    "GET  /api/users/{user}",
+    "PUT  /api/users/{user}",
+    "DELETE /api/users/{user}",
+    "GET  /api/audit-logs",
+    "GET  /health (Python service)",
+    "POST /process (Python service)",
+    "POST /match (Python service)",
+    "POST /process-fingerprint (Python service)",
+    "POST /match-fingerprint (Python service)"
+  ]
 }

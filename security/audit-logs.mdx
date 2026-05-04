@@ -1,0 +1,114 @@
+---
+title: "Audit logs: tracking all staff and clinical actions"
+description: "How to query the audit log for login events, fingerprint enrollments, verifications, patient edits, and fingerprint lock and unlock events."
+---
+
+Every significant action in the system is recorded to the `audit_logs` table. This provides a tamper-resistant trail of who did what, when, and for which patient — satisfying clinical governance and compliance requirements.
+
+## What is logged
+
+The audit log captures the following event types:
+
+| Action constant | Trigger |
+|-----------------|---------|
+| `login_success` | Successful staff login |
+| `login_failed` | Failed login attempt (when user record exists) |
+| `fingerprint_enroll` | Fingerprint template enrolled for a patient |
+| `fingerprint_match` | Verification scan returned a MATCH |
+| `fingerprint_no_match` | Verification scan returned NO MATCH |
+| `fingerprint_lock` | Fingerprint locked after repeated failures |
+| `fingerprint_unlock` | Admin unlocked a locked fingerprint record |
+| `fingerprint_delete` | Fingerprint record deactivated |
+| `patient_create` | New patient registered |
+| `patient_update` | Patient demographics updated (admin/super_admin) |
+| `patient_delete` | Patient deactivated |
+| `edit_request_submitted` | Nurse submitted a demographic edit request |
+| `edit_request_approved` | Admin approved an edit request |
+| `edit_request_rejected` | Admin rejected an edit request |
+| `edit_request_cancelled` | Nurse cancelled their own pending request |
+| `user_created` | New staff account created |
+| `user_deactivated` | Staff account deactivated |
+| `hospital_created` | New hospital record created |
+| `hospital_deactivated` | Hospital deactivated |
+| `manual_override` | Admin performed a manual override action |
+| `ehr_access` | EHR record fetched from GoT-HoMIS on match |
+| `insurance_check` | Insurance eligibility checked from GoT-HoMIS on match |
+
+## Log record structure
+
+Each audit log entry contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | integer | Unique log ID |
+| `staff_id` | integer | ID of the staff member who performed the action |
+| `hospital_id` | integer | Hospital scope of the action |
+| `patient_id` | integer \| null | Patient affected (null for non-patient events) |
+| `action` | string | Event type (see table above) |
+| `ip_address` | string | IP address of the request |
+| `user_agent` | string | Device/browser user agent |
+| `meta` | JSON | Action-specific detail (score, fingerprint_id, fields_changed, etc.) |
+| `created_at` | datetime | Timestamp of the event |
+
+## Querying audit logs
+
+`GET /api/audit-logs` is available to `super_admin`, `admin`, and `doctor` roles.
+
+### Role-based visibility
+
+| Role | Records returned |
+|------|-----------------|
+| `super_admin` | All hospitals (filter by `hospital_id` query param) |
+| `admin` | All records for own hospital |
+| `doctor` | Only records where the doctor is the `staff_id` |
+| `nurse` | Not permitted (403) |
+
+### Query parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `action` | string | Filter by action type (e.g. `fingerprint_match`) |
+| `patient_id` | integer | Filter by patient |
+| `staff_id` | integer | Filter by staff member (admin/super_admin only) |
+| `hospital_id` | integer | Filter by hospital (super_admin only) |
+| `from` | date (`YYYY-MM-DD`) | Start of date range |
+| `to` | date (`YYYY-MM-DD`) | End of date range |
+| `per_page` | integer | Results per page (default: 50) |
+
+### Example request
+
+```bash
+curl "https://api.hospital.example/api/audit-logs?action=fingerprint_lock&from=2026-04-01" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Example response
+
+```json
+{
+  "data": [
+    {
+      "id": 412,
+      "staff_id": 7,
+      "hospital_id": 1,
+      "patient_id": 55,
+      "action": "fingerprint_lock",
+      "ip_address": "192.168.1.42",
+      "user_agent": "Dart/3.1 (dart:io)",
+      "meta": {
+        "fingerprint_id": 23,
+        "failed_attempts": 10,
+        "window_hours": 1
+      },
+      "created_at": "2026-04-15T09:22:11.000000Z"
+    }
+  ],
+  "current_page": 1,
+  "per_page": 50,
+  "total": 1
+}
+```
+
+<Note>
+  The `meta` field contents vary by action type. For `fingerprint_match` and `fingerprint_no_match`, it includes `score` and `log_id`. For `patient_update`, it includes `fields_changed`. For `fingerprint_lock`, it includes `failed_attempts` and `window_hours`.
+</Note>

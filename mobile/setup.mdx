@@ -1,0 +1,137 @@
+---
+title: "Set up and configure the Flutter mobile app"
+description: "Install dependencies, configure the API base URL and Android permissions, then build and run the biometric Flutter app on a device or emulator."
+---
+
+The mobile app is a Flutter project targeting Android. It communicates with the Laravel backend over HTTP, so you need the backend running and reachable on the same network before the app will function. This page walks through getting the app running from a fresh clone to a live device.
+
+<Note>
+The project is developed and tested on Android. iOS support is not complete: WiFi SSID reading requires the "Access WiFi Information" entitlement, which is not included in the current provisioning profile. The `NetworkService` fails open on iOS (returns `true`) so the geofence WiFi check does not block access, but this should be resolved before any iOS production deployment.
+</Note>
+
+## Prerequisites
+
+- **Flutter SDK ≥ 3.11.0** — the `pubspec.yaml` declares `sdk: ^3.11.0`
+- **Android device or emulator** — API level 21 (Android 5.0) or higher
+- **Backend API running** — the Laravel server must be reachable at the IP address configured in the service files (see [Configure the API base URL](#configure-the-api-base-url) below)
+- `adb` installed and the device connected (or an emulator running) before `flutter run`
+
+## Steps
+
+<Steps>
+  <Step title="Clone the repository and navigate to the mobile directory">
+    ```bash
+    git clone https://github.com/FrankEWallace/Biometric-in-Healthcare.git
+    cd Biometric-in-Healthcare/mobile
+    ```
+  </Step>
+
+  <Step title="Install Flutter dependencies">
+    Fetch all packages declared in `pubspec.yaml`:
+
+    ```bash
+    flutter pub get
+    ```
+
+    This installs `http`, `provider`, `camera`, `image_picker`, `geolocator`, and `network_info_plus`, along with their transitive dependencies.
+  </Step>
+
+  <Step title="Configure the API base URL">
+    The base URL is hardcoded as a `static const` in three service files. Update all three to match the IP address and port where your Laravel server is running:
+
+    **`lib/services/auth_service.dart`**
+    ```dart
+    static const String _baseUrl = 'http://172.20.10.14:8000/api';
+    ```
+
+    **`lib/services/fingerprint_service.dart`**
+    ```dart
+    static const String _baseUrl = 'http://172.20.10.14:8000/api';
+    ```
+
+    **`lib/services/patient_service.dart`**
+    ```dart
+    static const String _baseUrl = 'http://172.20.10.14:8000/api';
+    ```
+
+    Replace `172.20.10.14:8000` with the actual host and port. The device and the server must be on the same network, or the server must be publicly reachable.
+  </Step>
+
+  <Step title="Run the app">
+    With a device connected or an emulator running:
+
+    <CodeGroup>
+    ```bash Run in debug mode
+    flutter run
+    ```
+
+    ```bash Run on a specific device
+    flutter run -d <device-id>
+    ```
+
+    ```bash Build a release APK
+    flutter build apk --release
+    ```
+    </CodeGroup>
+
+    The release APK is written to `build/app/outputs/flutter-apk/app-release.apk`.
+  </Step>
+</Steps>
+
+## Android permissions
+
+The following permissions must be declared in `android/app/src/main/AndroidManifest.xml`. They are required by the packages the app depends on:
+
+| Permission | Required by | Purpose |
+|---|---|---|
+| `CAMERA` | `camera` package | Live viewfinder and fingerprint image capture |
+| `ACCESS_FINE_LOCATION` | `geolocator` | High-accuracy GPS position for geofence check |
+| `ACCESS_WIFI_STATE` | `network_info_plus` | Read WiFi connection state |
+| `CHANGE_NETWORK_STATE` | `network_info_plus` | Required on some Android versions to read SSID |
+| `INTERNET` | `http` | All API requests to the Laravel backend |
+
+Example manifest entries:
+
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+<uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+<uses-permission android:name="android.permission.INTERNET" />
+```
+
+At runtime, the app requests `CAMERA` and `ACCESS_FINE_LOCATION` through the `geolocator` permission flow when those features are first used. If either permission is permanently denied, the user is shown an error and prompted to open Settings.
+
+## Full dependency list
+
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  provider: ^6.1.2
+  camera: ^0.11.0+2
+  image_picker: ^1.1.2
+  geolocator: ^13.0.2
+  network_info_plus: ^6.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+```
+
+## Geofence and WiFi bypass (development)
+
+Both `LocationService.isWithinHospitalRange()` and `NetworkService.isConnectedToHospitalWifi()` contain a `return true` bypass near the top of the method body. This allows development and testing without being physically at the hospital. Remove both bypasses before building a production release:
+
+```dart
+// lib/services/location_service.dart  — remove this line
+return true;  // DEV BYPASS
+
+// lib/services/network_service.dart  — remove this line
+return true;  // DEV BYPASS
+```
+
+After removing the bypasses, also update `LocationService.hospitalLat`, `LocationService.hospitalLng`, and `NetworkService.allowedSsids` to the real hospital coordinates and SSID.

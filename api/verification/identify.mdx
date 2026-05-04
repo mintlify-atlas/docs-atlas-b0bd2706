@@ -1,0 +1,119 @@
+---
+title: "POST /api/verify — identify an unknown patient"
+description: "Hospital-wide fingerprint identification scan. Searches all enrolled fingerprints to find a matching patient. Requires geofence validation before processing."
+---
+
+This is the primary identification endpoint used when a patient's identity is unknown. The probe fingerprint is compared against all active fingerprints enrolled at the nurse's hospital using a two-pass matching strategy. The geofence check — GPS coordinates and WiFi SSID — must pass before the scan is processed.
+
+Requires the `nurse` role. Rate-limited to **30 requests per minute per token**.
+
+## Two-pass matching
+
+To optimize performance in large patient databases:
+
+1. **Pass 1** — the probe is compared against all **primary** fingerprints only. If a match above the 0.35 threshold is found, the result is returned immediately.
+2. **Pass 2** — if pass 1 finds no match, the probe is compared against all **non-primary** active fingerprints. The best score across both passes is used.
+
+## Request
+
+```bash
+POST /api/verify
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+### Body parameters
+
+<ParamField body="image" type="string" required>
+  Base64-encoded fingerprint image (JPEG or PNG).
+</ParamField>
+
+<ParamField body="gps_latitude" type="number">
+  Device's current GPS latitude. Required if the hospital has GPS geofencing configured.
+</ParamField>
+
+<ParamField body="gps_longitude" type="number">
+  Device's current GPS longitude. Required if the hospital has GPS geofencing configured.
+</ParamField>
+
+<ParamField body="wifi_ssid" type="string">
+  Name of the WiFi network the device is connected to. Required if the hospital has WiFi SSID restriction configured.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/verify \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": "<base64-encoded-image>",
+    "gps_latitude": 3.1478,
+    "gps_longitude": 101.6953,
+    "wifi_ssid": "HospitalNet-Staff"
+  }'
+```
+
+## Response
+
+### 200 OK — match found
+
+```json
+{
+  "status": "matched",
+  "score": 0.68,
+  "patient": {
+    "id": 55,
+    "full_name": "Ahmad bin Yusof",
+    "date_of_birth": "1978-04-12",
+    "jmbg": "78041211223344",
+    "gender": "male",
+    "phone": "+60123456789"
+  },
+  "log_id": 214,
+  "ehr": { "record": "..." },
+  "insurance": { "eligible": true }
+}
+```
+
+### 200 OK — no match
+
+```json
+{
+  "status": "no_match",
+  "score": 0.12,
+  "patient": null,
+  "log_id": 215,
+  "ehr": null,
+  "insurance": null
+}
+```
+
+<ResponseField name="status" type="string">
+  `matched` or `no_match`.
+</ResponseField>
+
+<ResponseField name="score" type="float">
+  Best match score found. A score of 0.35 or above indicates a match.
+</ResponseField>
+
+<ResponseField name="log_id" type="integer">
+  ID of the verification log entry created for this scan. Use with `GET /api/verify/logs/{log}`.
+</ResponseField>
+
+<ResponseField name="ehr" type="object | null">
+  EHR record from GoT-HoMIS. Only populated on a successful match. `null` if no match or HoMIS unavailable.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `403 Forbidden` | Device is outside the hospital geofence |
+| `500 Internal Server Error` | Feature extraction from the Python service failed |
+
+```json
+{
+  "error": "Access denied: device is not within hospital premises."
+}
+```

@@ -1,0 +1,88 @@
+---
+title: "Deploy the Python fingerprint processing service"
+description: "Install and run the FastAPI microservice that handles OpenCV-based ORB fingerprint feature extraction and template matching for the backend."
+---
+
+The Python service is a FastAPI microservice that performs all the computationally intensive fingerprint work: image preprocessing, ORB feature extraction, and template matching. It is called internally by the Laravel backend and should never be exposed directly to the internet.
+
+<Steps>
+  <Step title="Install Python dependencies">
+    Navigate to the `python-service/` directory and install from `requirements.txt`.
+
+    ```bash
+    cd python-service
+    pip install -r requirements.txt
+    ```
+
+    Dependencies installed:
+
+    | Package | Version | Purpose |
+    |---------|---------|---------|
+    | `fastapi` | ≥0.115 | Web framework |
+    | `uvicorn[standard]` | ≥0.30 | ASGI server |
+    | `opencv-python` | ≥4.9 | Image processing and ORB |
+    | `numpy` | ≥1.26 | Array operations |
+    | `pillow` | ≥10.0 | Image I/O |
+    | `python-multipart` | ≥0.0.9 | Multipart file upload support |
+  </Step>
+
+  <Step title="Start the service">
+    ```bash
+    uvicorn app.main:app --host 127.0.0.1 --port 5001
+    ```
+
+    <Warning>
+      Bind to `127.0.0.1`, not `0.0.0.0`. This service is internal only and must not be accessible from the public network.
+    </Warning>
+  </Step>
+
+  <Step title="Verify the service is running">
+    ```bash
+    curl http://127.0.0.1:5001/health
+    ```
+
+    Expected response:
+
+    ```json
+    {"status": "ok"}
+    ```
+
+    Interactive API docs are available at `http://127.0.0.1:5001/docs` (Swagger UI) and `http://127.0.0.1:5001/redoc`.
+  </Step>
+
+  <Step title="Configure the Laravel backend to use it">
+    Set the `FINGERPRINT_SERVICE_URL` in the Laravel `.env` file:
+
+    ```bash
+    FINGERPRINT_SERVICE_URL=http://127.0.0.1:5001
+    ```
+
+    The Laravel `FingerprintService` uses this URL to call `/process`, `/match`, `/process-fingerprint`, and `/match-fingerprint`.
+  </Step>
+</Steps>
+
+## Endpoints provided
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness probe |
+| `POST` | `/process` | Base64 image → ORB template + quality score |
+| `POST` | `/match` | Probe template + candidates → best patient_id + score |
+| `POST` | `/process-fingerprint` | Upload image → full pipeline + feature extraction |
+| `POST` | `/match-fingerprint` | Compare two uploaded images, return MATCH/NO MATCH |
+
+See [Processing Service API Reference](/api/python/process) for full request/response documentation.
+
+## Running with a process manager
+
+For production deployments, run the service under a process manager such as `supervisord` or `systemd` to ensure it restarts on failure.
+
+```ini supervisord.conf
+[program:fingerprint-service]
+command=uvicorn app.main:app --host 127.0.0.1 --port 5001
+directory=/path/to/python-service
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/fingerprint-service.err.log
+stdout_logfile=/var/log/fingerprint-service.out.log
+```

@@ -1,0 +1,88 @@
+---
+title: "POST /api/patients — register a new patient"
+description: "POST /api/patients creates a patient record. Required fields: full_name and date_of_birth. Optional: gender, jmbg, phone, notes. Nurse role only. Returns 201."
+---
+
+Nurses use this endpoint to register new patients into the system. The patient is automatically assigned to the nurse's hospital. After registration, enroll a fingerprint using `POST /api/patients/{patient}/enroll` or `POST /api/fingerprint/register`.
+
+Requires the `nurse` role.
+
+## Request
+
+```bash
+POST /api/patients
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+### Body parameters
+
+<ParamField body="full_name" type="string" required>
+  Patient's full name. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="date_of_birth" type="string" required>
+  Date of birth in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="gender" type="string">
+  Optional. One of: `male`, `female`, `other`.
+</ParamField>
+
+<ParamField body="jmbg" type="string">
+  Optional. National identification number, up to 20 characters. Must be unique across all patients.
+</ParamField>
+
+<ParamField body="phone" type="string">
+  Optional. Contact phone number, up to 20 characters.
+</ParamField>
+
+<ParamField body="notes" type="string">
+  Optional. Clinical notes or additional context, up to 1000 characters.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/patients \
+  -H "Authorization: Bearer {token}" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "full_name": "Ahmad bin Yusof",
+    "date_of_birth": "1978-04-12",
+    "gender": "male",
+    "jmbg": "78041211223344",
+    "phone": "+60123456789"
+  }'
+```
+
+## Response
+
+### 201 Created
+
+```json
+{
+  "patient": {
+    "id": 55,
+    "hospital_id": 1,
+    "full_name": "Ahmad bin Yusof",
+    "date_of_birth": "1978-04-12",
+    "gender": "male",
+    "jmbg": "78041211223344",
+    "phone": "+60123456789",
+    "notes": null,
+    "is_active": true,
+    "is_enrolled": false,
+    "created_at": "2026-04-30T10:30:00.000000Z"
+  }
+}
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | Missing or expired token |
+| `403 Forbidden` | Role is not `nurse` |
+| `422 Unprocessable Entity` | Validation failed (e.g., missing `full_name`, duplicate `jmbg`, wrong date format) |

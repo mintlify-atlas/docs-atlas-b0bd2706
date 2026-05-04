@@ -1,0 +1,90 @@
+---
+title: "Roles and permissions in the patient ID system"
+description: "A complete matrix of the four staff roles — super_admin, admin, doctor, nurse — and exactly which API endpoints each role can access."
+---
+
+Every API request is authenticated with a Laravel Sanctum bearer token and checked against a four-level role matrix enforced by the `RequireRole` middleware. Roles are assigned when a staff user account is created and stored in the `users.role` column.
+
+## Role definitions
+
+| Role | Scope | Primary responsibilities |
+|------|-------|--------------------------|
+| `super_admin` | All hospitals | Cross-hospital management, user administration, audit log access. No direct clinical data access. |
+| `admin` | Own hospital | Staff management, patient management, emergency fingerprint enrollment, edit request approval. |
+| `doctor` | Own hospital | Read-only access to patient records, EHR data, and verification logs. Cannot enroll fingerprints or verify patients. |
+| `nurse` | Own hospital | Patient registration, fingerprint enrollment, fingerprint verification. Cannot directly edit patient demographics. |
+
+## Permissions matrix
+
+### Authentication
+
+| Endpoint | Public | nurse | doctor | admin | super_admin |
+|----------|--------|-------|--------|-------|-------------|
+| `POST /api/auth/login` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/auth/logout` | — | ✓ | ✓ | ✓ | ✓ |
+| `GET /api/auth/me` | — | ✓ | ✓ | ✓ | ✓ |
+
+### Patients
+
+| Endpoint | nurse | doctor | admin | super_admin |
+|----------|-------|--------|-------|-------------|
+| `GET /api/patients` | ✓ | ✓ | ✓ | ✓ |
+| `GET /api/patients/{id}` | ✓ | ✓ | ✓ | ✓ |
+| `POST /api/patients` | ✓ | — | — | — |
+| `PUT /api/patients/{id}` | — | — | ✓ | ✓ |
+| `DELETE /api/patients/{id}` | — | — | ✓ | ✓ |
+| `POST /api/patients/{id}/enroll` | ✓ | — | ✓ (emergency) | ✓ |
+| `DELETE /api/patients/{id}/fingerprints/{fp}` | — | — | ✓ | ✓ |
+| `POST /api/patients/{id}/edit-requests` | ✓ | — | — | — |
+
+### Edit requests
+
+| Endpoint | nurse | doctor | admin | super_admin |
+|----------|-------|--------|-------|-------------|
+| `GET /api/edit-requests` | — | — | ✓ | ✓ |
+| `PUT /api/edit-requests/{id}/approve` | — | — | ✓ | ✓ |
+| `PUT /api/edit-requests/{id}/reject` | — | — | ✓ | ✓ |
+| `PUT /api/edit-requests/{id}/cancel` | ✓ (own only) | — | — | — |
+
+### Fingerprints
+
+| Endpoint | nurse | doctor | admin | super_admin |
+|----------|-------|--------|-------|-------------|
+| `POST /api/fingerprint/upload` | ✓ | — | ✓ | ✓ |
+| `POST /api/fingerprint/register` | ✓ | — | ✓ | ✓ |
+| `POST /api/fingerprint/verify` | ✓ | — | — | — |
+| `POST /api/fingerprint/{fp}/unlock` | — | — | ✓ | ✓ |
+
+### Verification & logs
+
+| Endpoint | nurse | doctor | admin | super_admin |
+|----------|-------|--------|-------|-------------|
+| `POST /api/verify` | ✓ | — | — | — |
+| `GET /api/verify/logs` | Own only | Patient-centric (no score) | All hospital | All hospitals |
+| `GET /api/verify/logs/{id}` | Own only | No score field | ✓ | ✓ |
+
+### User management & audit
+
+| Endpoint | nurse | doctor | admin | super_admin |
+|----------|-------|--------|-------|-------------|
+| `GET/POST/PUT/DELETE /api/users` | — | — | ✓ | ✓ |
+| `GET /api/audit-logs` | — | Own entries only | All hospital | All hospitals |
+
+## Hospital scoping
+
+All data access is automatically scoped to the requesting user's `hospital_id`. A nurse at Hospital A cannot see patients, fingerprints, or logs belonging to Hospital B. Only `super_admin` accounts can query across hospitals.
+
+The `hospital.access` middleware enforces this on all patient and fingerprint routes.
+
+## Nurse edit request workflow
+
+Nurses cannot directly update patient demographic fields. Instead, they submit an edit request:
+
+1. Nurse submits `POST /api/patients/{patient}/edit-requests` with proposed changes
+2. Request enters a pending queue visible to admins at `GET /api/edit-requests`
+3. Admin approves (`PUT /api/edit-requests/{id}/approve`) or rejects (`PUT /api/edit-requests/{id}/reject`)
+4. Nurse can cancel their own pending request with `PUT /api/edit-requests/{id}/cancel`
+
+<Note>
+  All role enforcement is done server-side. The mobile app does not gate UI flows based on role — the API will return a `403 Forbidden` response if an unauthorized action is attempted.
+</Note>

@@ -1,0 +1,129 @@
+---
+title: "Register patients and manage demographic changes"
+description: "Enroll new patients with demographic details and fingerprints, and manage demographic changes through a nurse-initiated edit request workflow."
+---
+
+Patient registration is the entry point for every subsequent fingerprint interaction. A nurse creates a patient record with demographic information, and the system immediately moves into fingerprint capture. Admins can edit patient demographics directly; nurses must submit edit requests that an admin approves or rejects.
+
+## Patient data model
+
+Every patient record belongs to a single hospital. The table below lists all writable fields on the `patients` table.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `full_name` | string (max 200) | Yes | Patient's full legal name |
+| `date_of_birth` | date (`Y-m-d`) | Yes | ISO 8601 date string |
+| `gender` | enum | No | `male`, `female`, or `other` |
+| `jmbg` | string (size 20) | No | National ID — must be unique across all patients |
+| `phone` | string (max 20) | No | Contact phone number |
+| `notes` | string (max 1000) | No | Free-text clinical notes |
+| `is_active` | boolean | — | Set by the system; `false` after soft-delete |
+
+### The `is_enrolled` virtual attribute
+
+Every patient response includes an `is_enrolled` field that is not stored in the database. It is computed at serialization time by checking whether the patient has at least one active fingerprint record. Use this field to determine whether a patient can be verified without making a separate request to the fingerprints endpoint.
+
+```json
+{
+  "id": 42,
+  "full_name": "Amina Kovač",
+  "date_of_birth": "1990-04-15",
+  "gender": "female",
+  "jmbg": null,
+  "phone": "+387 61 000 000",
+  "notes": null,
+  "is_active": true,
+  "is_enrolled": true
+}
+```
+
+## Registration workflow
+
+<Steps>
+  <Step title="Nurse fills in patient demographics">
+    The mobile app collects `full_name`, `date_of_birth`, and optionally `gender`, `jmbg`, `phone`, and `notes`. The form validates that `full_name` is at least three characters and that `jmbg`, if supplied, is exactly 20 digits.
+  </Step>
+  <Step title="POST /api/patients creates the record">
+    The backend validates the payload, associates the new patient with the nurse's `hospital_id`, and returns the patient object with a 201 status. An audit log entry is written automatically.
+  </Step>
+  <Step title="Mobile app proceeds to fingerprint capture">
+    After the patient record is created, the app advances to the fingerprint capture flow. The nurse photographs the patient's right hand and then their left hand using the device camera. Each captured image is submitted to `POST /api/patients/{patient}/enroll`.
+  </Step>
+  <Step title="Registration complete">
+    Once both hands are captured, `is_enrolled` becomes `true` and the patient can be identified at any verification point within the hospital.
+  </Step>
+</Steps>
+
+## Create a patient
+
+```bash
+curl -X POST https://your-api/api/patients \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Amina Kovač",
+    "date_of_birth": "1990-04-15",
+    "gender": "female",
+    "jmbg": "04990415100023",
+    "phone": "+387 61 000 000",
+    "notes": "Allergic to penicillin"
+  }'
+```
+
+**Response (201)**
+
+```json
+{
+  "patient": {
+    "id": 42,
+    "hospital_id": 3,
+    "full_name": "Amina Kovač",
+    "date_of_birth": "1990-04-15",
+    "gender": "female",
+    "jmbg": "04990415100023",
+    "phone": "+387 61 000 000",
+    "notes": "Allergic to penicillin",
+    "is_active": true,
+    "is_enrolled": false,
+    "created_at": "2026-05-04T09:00:00Z",
+    "updated_at": "2026-05-04T09:00:00Z"
+  }
+}
+```
+
+## Edit request workflow
+
+Nurses cannot edit patient demographic fields directly. Any change to `full_name`, `phone`, `date_of_birth`, or `gender` must go through an edit request.
+
+<Steps>
+  <Step title="Nurse submits an edit request">
+    `POST /api/patients/{patient}/edit-requests` with `field_name`, `new_value`, and a `reason` of at least 10 characters. Only one pending request per field per patient is allowed at a time.
+
+    ```bash
+    curl -X POST https://your-api/api/patients/42/edit-requests \
+      -H "Authorization: Bearer <nurse-token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "field_name": "phone",
+        "new_value": "+387 61 111 222",
+        "reason": "Patient reported number change at reception."
+      }'
+    ```
+  </Step>
+  <Step title="Admin reviews the queue">
+    Admins and super admins see all pending requests via `GET /api/edit-requests`. Each request shows the old value, proposed new value, and the nurse who submitted it.
+  </Step>
+  <Step title="Admin approves or rejects">
+    - `PUT /api/edit-requests/{editRequest}/approve` — applies the change to the patient record immediately.
+    - `PUT /api/edit-requests/{editRequest}/reject` — closes the request without making any change.
+
+    Expired requests (past `expires_at`) are automatically rejected on the next approval attempt.
+  </Step>
+  <Step title="Nurse cancels if needed">
+    A nurse can cancel their own pending request before it is reviewed via `PUT /api/edit-requests/{editRequest}/cancel`.
+  </Step>
+</Steps>
+
+## Soft-delete
+
+`DELETE /api/patients/{patient}` sets `is_active` to `false`. The record is retained in the database for audit purposes. The patient no longer appears in `GET /api/patients` responses, which filter by `is_active = true`.

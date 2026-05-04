@@ -1,0 +1,120 @@
+---
+title: "Enroll patient fingerprints with ORB pipeline"
+description: "Upload a finger image and store an encrypted ORB feature template using either the legacy base64 pipeline or the enhanced preprocessing pipeline."
+---
+
+Fingerprint enrollment converts a JPEG or PNG image captured by the mobile device into an ORB feature template, which is encrypted and stored in the `fingerprints` table. Two enrollment endpoints exist: a legacy route that accepts a base64 string and an enhanced route that runs a full preprocessing pipeline before feature extraction. Both share the same quality gate, upsert behavior, and `is_primary` logic.
+
+## Processing pipeline
+
+The enhanced endpoint (`POST /api/fingerprint/register`) sends the uploaded image through the following stages before ORB feature extraction:
+
+1. **Grayscale conversion** — strips color channels to reduce noise.
+2. **Gaussian blur** — smooths the image to suppress high-frequency artifacts.
+3. **Histogram equalization** — normalizes contrast across the image.
+4. **Adaptive threshold** — converts to binary using locally computed thresholds.
+5. **Morphological thinning** — reduces ridge width to a single-pixel skeleton.
+6. **ORB feature extraction** — detects keypoints and computes binary descriptors.
+
+The legacy endpoint (`POST /api/fingerprint/upload`) sends the base64-encoded image directly to the `/process` endpoint, which applies only ORB extraction without the additional preprocessing steps.
+
+## Quality score threshold
+
+Every enrollment attempt is evaluated against a minimum quality score before any template is stored.
+
+<Warning>
+  The `/api/fingerprint/upload` (legacy) endpoint requires a minimum quality score of **0.10**. The `/api/patients/{patient}/enroll` endpoint enforces a stricter minimum of **0.30**. Images below the applicable threshold are rejected with a 422 response and must be recaptured. The quality score is computed as a Laplacian variance divided by 300; a blurry or poorly positioned capture will score near zero.
+</Warning>
+
+A 422 rejection response looks like this:
+
+```json
+{
+  "error": "Fingerprint quality is too low. Please recapture.",
+  "quality_score": 0.07,
+  "minimum": 0.10
+}
+```
+
+## Finger position values
+
+The `finger_position` field accepts the following values. If omitted, the legacy upload endpoint defaults to `right_index` and the enhanced register endpoint defaults to `right_hand`.
+
+| Value | Description |
+|---|---|
+| `right_thumb` | Right thumb |
+| `right_index` | Right index finger |
+| `right_middle` | Right middle finger |
+| `right_ring` | Right ring finger |
+| `right_little` | Right little finger |
+| `left_thumb` | Left thumb |
+| `left_index` | Left index finger |
+| `left_middle` | Left middle finger |
+| `left_ring` | Left ring finger |
+| `left_little` | Left little finger |
+| `right_hand` | Full right hand (wide camera frame) |
+| `left_hand` | Full left hand (wide camera frame) |
+
+## The `is_primary` flag
+
+Setting `is_primary: true` designates this template as the first candidate checked during hospital-wide identification. The verification engine runs a fast pass against primary fingerprints only before falling back to non-primary templates.
+
+When a new enrollment is marked `is_primary`, any existing primary fingerprint for the same patient is automatically demoted (`is_primary` set to `false`). A patient can have at most one primary fingerprint at a time.
+
+## Upsert behavior
+
+Re-enrolling the same `finger_position` for a patient does not create a duplicate record. The system uses a `firstOrNew` lookup on `(patient_id, finger_position)` — if a matching row already exists, it is updated in place with the new template, quality score, and `is_primary` flag. This means re-enrollment is safe to use as a quality improvement step without any cleanup step required.
+
+## Enroll via the enhanced pipeline
+
+```bash
+curl -X POST https://your-api/api/fingerprint/register \
+  -H "Authorization: Bearer <token>" \
+  -F "fingerprint=@/path/to/right_hand.jpg" \
+  -F "patient_id=42" \
+  -F "finger_position=right_hand" \
+  -F "is_primary=true"
+```
+
+**Response (201)**
+
+```json
+{
+  "message": "Fingerprint registered successfully.",
+  "fingerprint_id": 17,
+  "patient_id": 42,
+  "finger_position": "right_hand",
+  "quality_score": 0.74,
+  "keypoint_count": 312,
+  "feature_status": "ok",
+  "steps_applied": [
+    "grayscale",
+    "gaussian_blur",
+    "histogram_equalization",
+    "adaptive_threshold",
+    "thinning",
+    "orb"
+  ],
+  "is_primary": true
+}
+```
+
+## Enroll via the legacy pipeline
+
+```bash
+curl -X POST https://your-api/api/fingerprint/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "fingerprint=@/path/to/right_index.jpg" \
+  -F "patient_id=42" \
+  -F "finger_position=right_index" \
+  -F "is_primary=false"
+```
+
+## Lock mechanism
+
+Failed verification attempts against a fingerprint record are counted within a rolling one-hour window. When `failed_attempts` reaches `LOCK_THRESHOLD` (10) within `LOCK_WINDOW_HOURS` (1 hour), `locked_at` is set and all further verification attempts against that record return 423. An admin or super admin must call `POST /api/fingerprint/{fingerprint}/unlock` to clear the lock and reset the failure counters.
+
+```bash
+curl -X POST https://your-api/api/fingerprint/17/unlock \
+  -H "Authorization: Bearer <admin-token>"
+```

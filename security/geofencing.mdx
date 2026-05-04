@@ -1,0 +1,103 @@
+---
+title: "Restrict verification to hospital premises with geofencing"
+description: "How GPS radius checks and WiFi SSID validation enforce that fingerprint verification scans only succeed from within hospital grounds."
+---
+
+The system enforces that all fingerprint verification attempts originate from within the hospital's physical premises. Two independent signals are checked on every `POST /api/verify` call: GPS proximity and WiFi network SSID. Both checks run in the `GeofenceService` before the fingerprint scan is processed.
+
+## How geofencing works
+
+When a nurse initiates a verification scan, the Flutter app reads the device's current GPS coordinates (via `geolocator`) and the connected WiFi SSID (via `network_info_plus`), then includes them in the API request body:
+
+```json
+{
+  "image": "<base64-encoded fingerprint>",
+  "gps_latitude": 3.1478,
+  "gps_longitude": 101.6953,
+  "wifi_ssid": "HospitalNet"
+}
+```
+
+The Laravel backend passes these values to `GeofenceService::isWithinHospital()`, which compares them against the hospital's configured geofence settings.
+
+## GPS radius check
+
+The hospital record stores three GPS fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `gps_latitude` | float | Hospital's registered latitude |
+| `gps_longitude` | float | Hospital's registered longitude |
+| `gps_radius_meters` | int | Allowed radius around the hospital in metres |
+
+Distance between the device and the hospital is calculated using the **Haversine formula**:
+
+```php app/Services/GeofenceService.php
+$earthRadius = 6371000; // metres
+$dLat = deg2rad($lat - $hospital->gps_latitude);
+$dLon = deg2rad($lon - $hospital->gps_longitude);
+
+$a = sin($dLat / 2) ** 2
+    + cos(deg2rad($hospital->gps_latitude))
+    * cos(deg2rad($lat))
+    * sin($dLon / 2) ** 2;
+
+$distance = 2 * $earthRadius * asin(sqrt($a));
+return $distance <= $hospital->gps_radius_meters;
+```
+
+If the device is outside the configured radius, the GPS check fails.
+
+## WiFi SSID check
+
+The hospital record stores one WiFi field:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `wifi_ssid` | string | Authorized WiFi network name |
+
+The check is a simple string equality comparison: the `wifi_ssid` submitted in the request must exactly match the value stored on the hospital record.
+
+## Decision logic
+
+| GPS configured | WiFi configured | Both checks required? | Access granted when... |
+|---------------|----------------|----------------------|------------------------|
+| No | No | — | Always (fail-open) |
+| Yes | No | No | Device within GPS radius |
+| No | Yes | No | WiFi SSID matches |
+| Yes | Yes | Yes | Both GPS radius AND WiFi SSID match |
+
+When both signals are configured, **both must pass**. A device on the right WiFi but outside the GPS radius will be denied access, and vice versa.
+
+<Warning>
+  The fail-open policy (no restrictions configured = access allowed) is intentional for environments that have not yet configured geofencing. In production, configure at least one signal — preferably both — to enforce premises-only access.
+</Warning>
+
+## Geofence failure response
+
+When the geofence check fails, the API returns:
+
+```json
+{
+  "error": "Access denied: device is not within hospital premises."
+}
+```
+
+HTTP status: `403 Forbidden`.
+
+## Configuring a hospital's geofence
+
+Update the hospital record directly in the database or via the admin API. Example fields to set:
+
+```sql
+UPDATE hospitals
+SET gps_latitude       = 3.1478,
+    gps_longitude      = 101.6953,
+    gps_radius_meters  = 200,
+    wifi_ssid          = 'HospitalNet-Staff'
+WHERE id = 1;
+```
+
+<Tip>
+  A radius of 200–500 metres is typically sufficient for most hospital campuses. For multi-building campuses, consider setting a larger radius or using the WiFi SSID check as the primary gate.
+</Tip>

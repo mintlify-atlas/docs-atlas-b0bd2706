@@ -1,0 +1,107 @@
+---
+title: "ORB feature extraction — /process and /process-fingerprint"
+description: "The Python microservice endpoints that preprocess fingerprint images and extract ORB feature templates. Called internally by the Laravel backend."
+---
+
+The Python fingerprint microservice exposes two processing endpoints consumed by the Laravel backend. These endpoints are internal — they should never be called directly from client applications.
+
+## POST /process
+
+Accepts a base64-encoded fingerprint image and returns an ORB feature template with a quality score. This is the legacy pipeline used by the `POST /api/fingerprint/upload` backend endpoint.
+
+### Request
+
+```bash
+POST http://127.0.0.1:5001/process
+Content-Type: application/json
+```
+
+```json
+{
+  "image": "<base64-encoded JPEG or PNG>"
+}
+```
+
+<ParamField body="image" type="string" required>
+  Base64-encoded JPEG or PNG fingerprint image. Must not be empty.
+</ParamField>
+
+### Response — 200 OK
+
+```json
+{
+  "template": {
+    "keypoints": [...],
+    "descriptors": [...]
+  },
+  "quality_score": 0.72
+}
+```
+
+<ResponseField name="template" type="object">
+  ORB feature template containing serialized keypoints and BRIEF descriptors. Store this and pass it to `/match` for comparison.
+</ResponseField>
+
+<ResponseField name="quality_score" type="float">
+  Image quality score in [0, 1]. Scores below **0.30** indicate poor capture quality and should be rejected before storing.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | Invalid base64 data, or image cannot be decoded |
+
+## POST /process-fingerprint
+
+Accepts a multipart image file upload and runs the full enhanced pipeline: grayscale → Gaussian blur → histogram equalization → adaptive threshold → morphological thinning → ORB feature extraction. Used by the `POST /api/fingerprint/register` backend endpoint.
+
+### Request
+
+```bash
+POST http://127.0.0.1:5001/process-fingerprint
+Content-Type: multipart/form-data
+```
+
+<ParamField body="file" type="file" required>
+  JPEG or PNG fingerprint image. Must be `image/jpeg`, `image/jpg`, or `image/png`.
+</ParamField>
+
+### Response — 200 OK
+
+```json
+{
+  "success": true,
+  "message": "Image processed successfully.",
+  "filename": "finger.jpg",
+  "quality_score": 0.72,
+  "steps_applied": ["grayscale", "blur", "equalize", "threshold", "thin"],
+  "processed_image": "<base64-encoded PNG of thinned skeleton>",
+  "features": {
+    "keypoint_count": 148,
+    "status": "ok",
+    "keypoints": [...],
+    "descriptors": [...]
+  }
+}
+```
+
+<ResponseField name="features.status" type="string">
+  `ok` — sufficient features for reliable matching (10+ keypoints). `low_quality` — fewer than 10 keypoints; match result unreliable. `no_features` — blank or unreadable image; reject the capture.
+</ResponseField>
+
+<ResponseField name="processed_image" type="string">
+  Base64-encoded PNG of the morphologically thinned skeleton image, for debugging or display.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | Unsupported file type, empty file, or undecodable image |
+
+```json
+{
+  "detail": "Unsupported file type 'image/gif'. Use JPEG or PNG."
+}
+```

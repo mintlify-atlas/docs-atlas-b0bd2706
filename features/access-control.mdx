@@ -1,0 +1,107 @@
+---
+title: "Restrict access with geofencing and WiFi checks"
+description: "Enforce hospital-premises access by combining GPS Haversine geofencing and WiFi SSID matching, and lock fingerprint records after repeated failed attempts."
+---
+
+The system can restrict fingerprint verification to devices that are physically inside the hospital using two independent signals: GPS coordinates and WiFi network name. Both checks are optional and configured per hospital record. A separate lock mechanism protects against brute-force attempts by disabling fingerprint records after a configurable number of consecutive failures.
+
+## GPS geofencing
+
+When the hospital record has `gps_latitude`, `gps_longitude`, and `gps_radius_meters` set, the `GeofenceService` computes the Haversine distance between the device's reported coordinates and the hospital's registered location. If the device is farther from the hospital than `gps_radius_meters`, the check fails.
+
+The Haversine calculation uses an Earth radius of 6,371,000 meters and operates on the decimal degree values stored in the hospital record.
+
+```php
+// Simplified from GeofenceService::isWithinRadius()
+$distance = 2 * 6371000 * asin(sqrt(
+    sin(deg2rad(($lat - $hospital->gps_latitude) / 2)) ** 2 +
+    cos(deg2rad($hospital->gps_latitude)) *
+    cos(deg2rad($lat)) *
+    sin(deg2rad(($lon - $hospital->gps_longitude) / 2)) ** 2
+));
+
+return $distance <= $hospital->gps_radius_meters;
+```
+
+## WiFi SSID restriction
+
+When the hospital record has a `wifi_ssid` value set, the device must report a matching SSID in the `wifi_ssid` field of the request body. The comparison is a strict string equality check — case-sensitive, no wildcards.
+
+## How the checks combine
+
+| GPS configured | WiFi configured | Result |
+|---|---|---|
+| No | No | Access allowed (fail-open) |
+| Yes | No | GPS distance must be within `gps_radius_meters` |
+| No | Yes | Device SSID must equal hospital `wifi_ssid` |
+| Yes | Yes | Both GPS and WiFi checks must pass |
+
+When both checks are configured, both must pass. A device that is within the GPS radius but connected to the wrong WiFi network is denied access.
+
+<Warning>
+  The fail-open policy (no restrictions configured → access allowed) is intentional for development and initial deployment, but should not be used in production. Configure at minimum a WiFi SSID on every hospital record before going live. For higher assurance, combine both GPS and WiFi restrictions, and ensure `gps_radius_meters` is set conservatively — 50 to 150 meters is typical for a single building.
+</Warning>
+
+## What the mobile app sends
+
+The mobile app includes location data in the `POST /api/verify` request body. The fields are optional at the HTTP level but will cause a 403 if they are absent and the hospital has a corresponding restriction configured.
+
+```json
+{
+  "image": "<base64-encoded-fingerprint-image>",
+  "gps_latitude": 43.8484,
+  "gps_longitude": 18.3564,
+  "wifi_ssid": "HospitalNet"
+}
+```
+
+Field validation rules:
+
+- `gps_latitude` — numeric, between -90 and 90
+- `gps_longitude` — numeric, between -180 and 180
+- `wifi_ssid` — string, max 100 characters
+
+## Access denied response
+
+When a geofence check fails, the API returns 403 with no match attempt performed:
+
+```json
+{
+  "error": "Access denied: device is not within hospital premises."
+}
+```
+
+## Fingerprint lock mechanism
+
+In addition to the geofence, the system tracks failed verification attempts at the fingerprint record level to limit brute-force attacks.
+
+- `LOCK_THRESHOLD` is **10 failures**.
+- `LOCK_WINDOW_HOURS` is **1 hour** (rolling window).
+
+When a verification attempt fails, `recordFailure()` increments `failed_attempts` on the matched fingerprint record. If the last recorded attempt was outside the rolling window, the counter resets to 1 and a new window starts. When `failed_attempts` reaches 10 within the window, `locked_at` is set to the current timestamp.
+
+Any subsequent verification against a locked record returns 423 before the probe image is processed:
+
+```json
+{
+  "error": "This fingerprint record is locked due to repeated failed attempts. Contact an administrator to unlock.",
+  "locked_at": "2026-05-04T10:32:00Z"
+}
+```
+
+A successful match resets `failed_attempts` to zero and clears `locked_at` and `attempts_window_start`.
+
+An admin or super admin unlocks a record manually:
+
+```bash
+curl -X POST https://your-api/api/fingerprint/17/unlock \
+  -H "Authorization: Bearer <admin-token>"
+```
+
+```json
+{
+  "message": "Fingerprint unlocked successfully.",
+  "fingerprint_id": 17,
+  "patient_id": 42
+}
+```

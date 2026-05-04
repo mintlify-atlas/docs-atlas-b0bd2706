@@ -1,0 +1,39 @@
+---
+title: "Revoke a session token — POST /api/auth/logout"
+description: "POST /api/auth/logout invalidates the current bearer token immediately. After logging out, the staff member must log in again to obtain a new token."
+---
+
+Invalidates the bearer token used to make this request. After logging out, the token cannot be used for further API calls. The staff member must log in again to obtain a new token.
+
+## Request
+
+```bash
+POST /api/auth/logout
+Authorization: Bearer {token}
+```
+
+No request body is required.
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/auth/logout \
+  -H "Authorization: Bearer 1|abcdefghij1234567890" \
+  -H "Accept: application/json"
+```
+
+## Response
+
+### 200 OK
+
+```json
+{
+  "message": "Logged out."
+}
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | No token provided or token already expired |

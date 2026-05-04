@@ -1,0 +1,120 @@
+---
+title: "Mobile app screens and nurse workflows"
+description: "A guide to every screen in the Flutter app, covering what nurses see and what API calls each screen makes during registration and verification."
+---
+
+The Flutter app is designed for frontline hospital staff — primarily nurses — who register patients and verify their identity at the point of care. Each screen maps directly to a step in one of two core workflows: patient registration or fingerprint verification.
+
+## Screen overview
+
+```
+Splash → Login → Home Dashboard
+                      ├── Patient Registration → Fingerprint Capture → Preview → Result
+                      └── Verification → Camera → Verify → EHR / Result
+```
+
+## Screens
+
+<AccordionGroup>
+  <Accordion title="Splash screen">
+    The app entry point shown briefly on launch. Checks for a stored session token and routes the user to either the **Login** screen (no session) or the **Home Dashboard** (active session).
+  </Accordion>
+
+  <Accordion title="Login screen">
+    Staff authenticate with their `username` and `password`. The app calls `POST /api/auth/login` and stores the returned Sanctum token in memory via `AuthService`. On success, the user is routed to the Home Dashboard.
+
+    ```dart lib/services/auth_service.dart
+    final response = await http.post(
+      Uri.parse('$_baseUrl/auth/login'),
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: jsonEncode({'username': username, 'password': password}),
+    );
+    ```
+
+    Error states are surfaced as user-facing messages (invalid credentials, disabled account, network error).
+  </Accordion>
+
+  <Accordion title="Home dashboard">
+    Navigation hub shown after login. Displays the logged-in nurse's name and hospital, and provides buttons to navigate to the Patient Registration and Verification screens.
+  </Accordion>
+
+  <Accordion title="Patient registration screen">
+    A form where a nurse enters new patient demographics:
+
+    | Field | Type | Notes |
+    |-------|------|-------|
+    | `full_name` | Text | Required |
+    | `date_of_birth` | Date | Required, format `YYYY-MM-DD` |
+    | `gender` | Select | `male`, `female`, `other` |
+    | `jmbg` | Text | Unique 20-character national ID |
+    | `phone` | Text | Optional |
+    | `notes` | Text | Optional clinical notes |
+
+    On submit the app calls `POST /api/patients`. After the patient is created, the flow optionally continues to fingerprint capture.
+  </Accordion>
+
+  <Accordion title="Camera screen">
+    Opens the device camera in a full-screen capture mode with a fingerprint overlay guide. Used for both registration enrollment and verification. The `showFingerprintOverlay` and `isHandCapture` flags control the visual prompt shown to the user. Returns an `XFile` image to the calling screen.
+  </Accordion>
+
+  <Accordion title="Fingerprint capture screen">
+    Displays the camera view specifically for fingerprint capture during enrollment. After capture, the user proceeds to the Preview screen before the image is submitted to the API.
+  </Accordion>
+
+  <Accordion title="Fingerprint preview screen">
+    Shows the captured fingerprint image alongside a quality indicator. The nurse can retake the image or confirm and submit it to `POST /api/fingerprint/register`. If the quality score returned from the backend is below the minimum threshold, the screen prompts for a retake with actionable guidance.
+  </Accordion>
+
+  <Accordion title="Verification screen">
+    The main identity-check screen. The nurse enters a numeric **Patient ID**, then taps "Scan Fingerprint" to open the camera. After capture:
+
+    1. The image is sent to `POST /api/fingerprint/verify` via `FingerprintService.verifyFingerprint()`
+    2. The app passes the bearer token from `AuthProvider`
+    3. On **MATCH**: navigates to the EHR screen with patient and insurance data
+    4. On **NO MATCH**: navigates to the Result screen with the attempt count; the nurse can retry up to 3 times before being advised to escalate
+
+    Error kinds are mapped to actionable messages:
+
+    | Error kind | User-facing message |
+    |------------|---------------------|
+    | `network` | Check your connection and retry |
+    | `qualityTooLow` | Image too blurry — move to better lighting |
+    | `noFeatures` | No features detected — ensure finger covers the frame |
+    | `serviceUnavailable` | Processing service temporarily unavailable |
+    | `notFound` | Patient not found or no fingerprint enrolled |
+    | `unauthorized` | Session expired — log out and log in again |
+  </Accordion>
+
+  <Accordion title="Result screen">
+    Displayed after a NO MATCH verdict. Shows the attempt count, the score returned by the API, and a "Try Again" button that pops back to the Verification screen with the attempt counter intact. After the maximum attempt count is reached, the nurse is advised to escalate to an administrator.
+  </Accordion>
+
+  <Accordion title="EHR screen">
+    Displayed after a successful MATCH. Shows the data returned from the GoT-HoMIS integration:
+
+    - Patient name and matched finger position
+    - Match score
+    - EHR record fields (if available from the HoMIS system)
+    - Insurance eligibility status (if available)
+
+    If the HoMIS system is unavailable, the screen still loads with the match result and a notice that EHR data could not be retrieved.
+  </Accordion>
+
+  <Accordion title="Edit request screen">
+    Allows a nurse to submit a demographic correction request for an existing patient. The form collects the proposed changes, which are sent to `POST /api/patients/{patient}/edit-requests`. An admin must then approve or reject the request via the backend API before the patient record is updated.
+  </Accordion>
+</AccordionGroup>
+
+## Services used by the app
+
+| Service | File | Responsibility |
+|---------|------|----------------|
+| `AuthService` | `lib/services/auth_service.dart` | Login, logout, token management, auth headers |
+| `FingerprintService` | `lib/services/fingerprint_service.dart` | Fingerprint upload, enrollment, and verification API calls |
+| `PatientService` | `lib/services/patient_service.dart` | Patient CRUD and listing |
+| `LocationService` | `lib/services/location_service.dart` | GPS coordinates via `geolocator` |
+| `NetworkService` | `lib/services/network_service.dart` | WiFi SSID via `network_info_plus` |
+
+<Note>
+  The `LocationService` and `NetworkService` run before every verification call to gather GPS coordinates and WiFi SSID, which are passed in the API request body so the backend can enforce the geofence.
+</Note>

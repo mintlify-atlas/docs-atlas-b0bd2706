@@ -1,0 +1,98 @@
+---
+title: "Authenticate staff — POST /api/auth/login"
+description: "POST /api/auth/login authenticates staff with username and password, returning a Sanctum bearer token valid for 8 hours and the user's role and hospital ID."
+---
+
+Staff authenticate by posting their credentials to this endpoint. A successful response returns a bearer token that must be included in the `Authorization` header of all subsequent requests.
+
+This endpoint is public (no authentication required) and rate-limited to **10 requests per minute per IP address**.
+
+## Request
+
+```bash
+POST /api/auth/login
+Content-Type: application/json
+```
+
+### Body parameters
+
+<ParamField body="username" type="string" required>
+  The staff member's username as assigned by an administrator.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The staff member's password.
+</ParamField>
+
+### Example request
+
+```bash
+curl -X POST https://api.hospital.example/api/auth/login \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{"username": "nurse_sarah", "password": "secret"}'
+```
+
+## Response
+
+### 200 OK — login successful
+
+```json
+{
+  "token": "1|abcdefghij1234567890",
+  "user": {
+    "id": 7,
+    "name": "Sarah Johnson",
+    "username": "nurse_sarah",
+    "email": "sarah@hospital.example",
+    "role": "nurse",
+    "hospital_id": 1
+  }
+}
+```
+
+<ResponseField name="token" type="string">
+  Bearer token. Pass this in the `Authorization: Bearer {token}` header. Expires after 8 hours.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  <Expandable title="user fields">
+    <ResponseField name="id" type="integer">Unique staff ID.</ResponseField>
+    <ResponseField name="name" type="string">Full display name.</ResponseField>
+    <ResponseField name="username" type="string">Login username.</ResponseField>
+    <ResponseField name="email" type="string">Staff email address.</ResponseField>
+    <ResponseField name="role" type="string">`super_admin`, `admin`, `doctor`, or `nurse`.</ResponseField>
+    <ResponseField name="hospital_id" type="integer">The hospital this staff member belongs to.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `422 Unprocessable Entity` | Invalid credentials |
+| `403 Forbidden` | Account is disabled (`is_active = false`) |
+| `429 Too Many Requests` | Rate limit exceeded (10 req/min per IP) |
+
+```json
+{
+  "message": "The given data was invalid.",
+  "errors": {
+    "username": ["Invalid credentials."]
+  }
+}
+```
+
+## Using the token
+
+Include the token in the `Authorization` header of every subsequent request:
+
+```bash
+curl https://api.hospital.example/api/auth/me \
+  -H "Authorization: Bearer 1|abcdefghij1234567890" \
+  -H "Accept: application/json"
+```
+
+<Note>
+  All existing tokens for a user are revoked when a new login succeeds. Each staff member can only have one active token at a time.
+</Note>
